@@ -114,10 +114,11 @@ fn preprocessing_flags_are_optional_and_accepted_in_range() {
         Path::new("--contrast"),
         Path::new("3"),
         Path::new("--unsharp"),
-        Path::new("0"),
+        Path::new("1.5"),
     ]);
     assert!(adjusted_run.status.success());
     assert!(String::from_utf8_lossy(&adjusted_run.stdout).contains("contrast=3.00"));
+    assert!(String::from_utf8_lossy(&adjusted_run.stdout).contains("unsharp=1.50"));
     assert_ne!(fs::read(plain).unwrap(), fs::read(adjusted).unwrap());
 }
 

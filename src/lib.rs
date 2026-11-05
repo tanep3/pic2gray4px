@@ -1,5 +1,6 @@
 //! 2×2 neighborhood gray, represented by real black and white pixels.
 
+mod autotune;
 mod optimizer;
 
 use image::{imageops, DynamicImage, ImageDecoder, ImageReader, RgbaImage};
@@ -14,9 +15,9 @@ pub type Result<T> = std::result::Result<T, Box<dyn Error>>;
 pub struct ConversionOptions {
     pub width: Option<u32>,
     pub passes: usize,
-    /// None selects a conservative per-image value; Some(1.0) disables contrast.
+    /// None searches completed 4px outputs; Some(1.0) disables contrast.
     pub contrast: Option<f32>,
-    /// None selects a conservative per-image value; Some(0.0) disables sharpening.
+    /// None searches completed 4px outputs; Some(0.0) disables sharpening.
     pub unsharp: Option<f32>,
     /// Diffuse cell white-count rounding residuals to neighboring cells.
     pub diffusion: bool,
@@ -128,25 +129,70 @@ pub fn convert_with_options(
             }
         }
     }
-    let contrast = contrast
-        .unwrap_or_else(|| choose_auto_contrast(&target, stride, valid_w, valid_h, &eligible));
-    preprocess(&mut target, stride, valid_w, valid_h, contrast, 0.0);
-    let unsharp = unsharp
-        .unwrap_or_else(|| choose_auto_unsharp(&target, stride, valid_w, valid_h, &eligible));
-    preprocess(&mut target, stride, valid_w, valid_h, 1.0, unsharp);
-    let result = optimizer::optimize(
-        &target.iter().map(|&v| v as f64).collect::<Vec<_>>(),
-        out_w as usize,
-        out_h as usize,
-        valid_w,
-        valid_h,
-        passes,
-        diffusion,
-    );
+    let tonal = has_tonal_range(&target, &eligible);
+    let contrasts: Vec<f32> = match contrast {
+        Some(v) => vec![v],
+        None if tonal => vec![1.0, 1.04, 1.08, 1.12],
+        None => vec![1.0],
+    };
+    let sharpness: Vec<f32> = match unsharp {
+        Some(v) => vec![v],
+        None if tonal => vec![0.0, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5],
+        None => vec![0.0],
+    };
+    let mut best: Option<(f64, f32, f32, Vec<u8>)> = None;
+    for factor in contrasts {
+        let mut contrasted = target.clone();
+        preprocess(&mut contrasted, stride, valid_w, valid_h, factor, 0.0);
+        if contrast.is_none() {
+            let (rms, extra_sat) = stats(&target, &contrasted, &eligible);
+            if rms > 6.0 / 255.0 || extra_sat > 0.01 {
+                continue;
+            }
+        }
+        for amount in &sharpness {
+            let mut trial = contrasted.clone();
+            preprocess(&mut trial, stride, valid_w, valid_h, 1.0, *amount);
+            if unsharp.is_none() {
+                let (rms, extra_sat) = stats(&contrasted, &trial, &eligible);
+                if rms > 12.0 / 255.0 || extra_sat > 0.02 {
+                    continue;
+                }
+            }
+            let result = optimizer::optimize(
+                &trial.iter().map(|&v| v as f64).collect::<Vec<_>>(),
+                out_w as usize,
+                out_h as usize,
+                valid_w,
+                valid_h,
+                passes,
+                diffusion,
+            );
+            let score = if contrast.is_none() || unsharp.is_none() {
+                autotune::score(
+                    &target,
+                    &result.pixels,
+                    stride,
+                    out_h as usize,
+                    valid_w,
+                    valid_h,
+                ) + 0.0001 * ((factor - 1.0).powi(2) + amount.powi(2)) as f64
+            } else {
+                0.0
+            };
+            if best
+                .as_ref()
+                .is_none_or(|(old, _, _, _)| score < *old - 1e-12)
+            {
+                best = Some((score, factor, *amount, result.pixels));
+            }
+        }
+    }
+    let (_, contrast, unsharp, pixels) = best.expect("unadjusted candidate must be available");
     Ok(ConversionResult {
         width: out_w,
         height: out_h,
-        pixels: result.pixels,
+        pixels,
         contrast,
         unsharp,
     })
@@ -178,50 +224,6 @@ fn has_tonal_range(target: &[f32], eligible: &[usize]) -> bool {
     let mut values: Vec<f32> = eligible.iter().map(|&i| target[i]).collect();
     values.sort_by(f32::total_cmp);
     values[values.len() * 9 / 10] - values[values.len() / 10] >= 0.1
-}
-
-fn choose_auto_contrast(
-    target: &[f32],
-    stride: usize,
-    w: usize,
-    h: usize,
-    eligible: &[usize],
-) -> f32 {
-    if !has_tonal_range(target, eligible) {
-        return 1.0;
-    }
-    let mut best = 1.0;
-    for factor in [1.02, 1.04, 1.06, 1.08, 1.10, 1.12] {
-        let mut trial = target.to_vec();
-        preprocess(&mut trial, stride, w, h, factor, 0.0);
-        let (rms, extra_sat) = stats(target, &trial, eligible);
-        if rms >= 0.25 / 255.0 && rms <= 6.0 / 255.0 && extra_sat <= 0.01 {
-            best = factor;
-        }
-    }
-    best
-}
-
-fn choose_auto_unsharp(
-    target: &[f32],
-    stride: usize,
-    w: usize,
-    h: usize,
-    eligible: &[usize],
-) -> f32 {
-    if !has_tonal_range(target, eligible) {
-        return 0.0;
-    }
-    let mut best = 0.0;
-    for amount in [0.15, 0.25, 0.35, 0.5] {
-        let mut trial = target.to_vec();
-        preprocess(&mut trial, stride, w, h, 1.0, amount);
-        let (rms, extra_sat) = stats(target, &trial, eligible);
-        if rms >= 0.25 / 255.0 && rms <= 3.0 / 255.0 && extra_sat <= 0.005 {
-            best = amount;
-        }
-    }
-    best
 }
 
 fn preprocess(
@@ -423,7 +425,7 @@ mod tests {
         let ramp_image = DynamicImage::ImageRgba8(ramp.clone());
         let result = convert_with_options(&ramp_image, ConversionOptions::default()).unwrap();
         assert!((1.0..=1.12).contains(&result.contrast));
-        assert!((0.0..=0.5).contains(&result.unsharp));
+        assert!((0.0..=1.5).contains(&result.unsharp));
         let mut original = vec![1.0; 32 * 16];
         fill_luminance(&ramp, 32, &mut original);
         let eligible: Vec<usize> = (0..original.len()).collect();
@@ -434,7 +436,7 @@ mod tests {
         let mut sharpened = contrasted.clone();
         preprocess(&mut sharpened, 32, 32, 16, 1.0, result.unsharp);
         let (rms_sharp, sat_sharp) = stats(&contrasted, &sharpened, &eligible);
-        assert!(rms_sharp <= 3.0 / 255.0 + 1e-6 && sat_sharp <= 0.005);
+        assert!(rms_sharp <= 12.0 / 255.0 + 1e-6 && sat_sharp <= 0.02);
 
         for kind in 0..3 {
             let art = RgbaImage::from_fn(32, 16, |x, _| {
@@ -454,6 +456,37 @@ mod tests {
             if kind == 1 {
                 assert!(result.pixels.iter().any(|&v| v == 0));
             }
+        }
+    }
+
+    #[test]
+    fn auto_search_scores_no_worse_than_unadjusted_on_varied_tones() {
+        for kind in 0..2 {
+            let rgba = RgbaImage::from_fn(64, 48, |x, y| {
+                let gray = if kind == 0 {
+                    (20 + x * 3) as u8 // broad grayscale ramp
+                } else {
+                    (128.0 + 19.0 * (x as f32 / 5.0).sin() + 11.0 * (y as f32 / 7.0).cos()) as u8
+                    // low contrast texture
+                };
+                image::Rgba([gray, gray, gray, 255])
+            });
+            let image = DynamicImage::ImageRgba8(rgba.clone());
+            let auto = convert_with_options(&image, ConversionOptions::default()).unwrap();
+            let plain = convert_with_options(
+                &image,
+                ConversionOptions {
+                    contrast: Some(1.0),
+                    unsharp: Some(0.0),
+                    ..ConversionOptions::default()
+                },
+            )
+            .unwrap();
+            let mut original = vec![1.0; 64 * 48];
+            fill_luminance(&rgba, 64, &mut original);
+            let score_auto = autotune::score(&original, &auto.pixels, 64, 48, 64, 48);
+            let score_plain = autotune::score(&original, &plain.pixels, 64, 48, 64, 48);
+            assert!(score_auto <= score_plain + 1e-12, "kind {kind}");
         }
     }
 
