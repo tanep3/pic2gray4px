@@ -4,22 +4,45 @@
 
 `pic2gray4px` は、2×2 の小さなマスに白を何個置くかで 5 段階の明るさを作る Rust 製 CLI です。白点の位置は周囲の見え方を見ながら選びます。さらに、マスごとに丸めたときの端数を隣のマスへ渡すので、広いグラデーションの濃さも残しやすくなりました。できあがるのは、一般的なビューアで開ける **1-bit グレースケール PNG** です。
 
+## 変換前と変換後
+
+| 変換前（入力画像） | 変換後（1-bit グレースケール PNG） |
+| --- | --- |
+| ![変換前のたね子](docs/images/taneko-before.png) | ![4px グレーに変換したたね子](docs/images/taneko-after.png) |
+
+どちらも同じ構図・384×384 ピクセルです。[元の JPEG](docs/images/taneko-source.jpg) を縮小した入力画像を、そのまま `pic2gray4px` で変換しました。
+
+## インストール
+
+プロジェクトのルートで:
+
+```sh
+cargo install --path .
+```
+
 ## 使ってみる
 
 ```sh
-cargo run --release -- photo.jpg
+pic2gray4px photo.jpg
 # photo-4px.png ができる
 ```
 
 T02 など幅 384 ピクセル向けなら:
 
 ```sh
-cargo run --release -- photo.jpg photo-t02.png --width 384
+pic2gray4px photo.jpg photo-t02.png --width 384
 ```
 
-`cargo install --path .` で `pic2gray4px` コマンドをインストールできます。入力は PNG、JPEG、WebP、BMP、TIFF、PNM に対応します。画像が奇数寸法なら右端・下端を白で補います。透過部分は白地に重ねます。
+入力は PNG、JPEG、WebP、BMP、TIFF、PNM に対応します。画像が奇数寸法なら右端・下端を白で補います。透過部分は白地に重ねます。
 
 既存の出力ファイルは上書きしません。意図して上書きするときだけ `--force` を付けてください。
+
+掲載画像を作り直す場合は、`ffmpeg` で元の JPEG を 384×384 に縮小してから変換します。出力先に画像がすでにある場合に限り `--force` が必要です。
+
+```sh
+ffmpeg -y -i docs/images/taneko-source.jpg -vf scale=384:384:flags=lanczos -frames:v 1 docs/images/taneko-before.png
+pic2gray4px docs/images/taneko-before.png docs/images/taneko-after.png --force
+```
 
 ## 写りを調整する
 
@@ -34,4 +57,6 @@ pic2gray4px photo.jpg another.png --contrast off --unsharp off
 
 元の VM 実験の「マスごとに白点数を独立に丸める」方式と比べるなら、`--no-diffusion --contrast off --unsharp off` を指定します。`--passes 0..10` は配置を見直す上限回数で、標準は 10 です。
 
-詳しくは [要件定義](docs/requirements.md)、[アルゴリズム](docs/algorithm.md)、[システム設計](docs/design.md) を参照してください。MIT License。
+詳しくは [要件定義](docs/requirements.md)、[アルゴリズム](docs/algorithm.md)、[システム設計](docs/design.md) を参照してください。
+
+Copyright (c) 2026 Tane Channel Technology. MIT License.
