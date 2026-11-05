@@ -4,13 +4,11 @@
 
 `pic2gray4px` は、2×2 の小さなマスに白を何個置くかで 5 段階の明るさを作る Rust 製 CLI です。白点の位置は周囲の見え方を見ながら選びます。さらに、マスごとに丸めたときの端数を隣のマスへ渡すので、広いグラデーションの濃さも残しやすくなりました。できあがるのは、一般的なビューアで開ける **1-bit グレースケール PNG** です。
 
-## 変換前と変換後
+## 変換例
 
-| 変換前（入力画像） | 変換後（1-bit グレースケール PNG） |
-| --- | --- |
-| ![変換前のたね子](docs/images/taneko-before.png) | ![4px グレーに変換したたね子](docs/images/taneko-after.png) |
+![4px グレーに変換したたね子](docs/images/taneko-after.png)
 
-どちらも同じ構図・384×384 ピクセルです。[元の JPEG](docs/images/taneko-source.jpg) を縮小した入力画像を、そのまま `pic2gray4px` で変換しました。
+384×384 ピクセルの 1-bit グレースケール PNG です。
 
 ## インストール
 
@@ -36,13 +34,6 @@ pic2gray4px photo.jpg photo-t02.png --width 384
 入力は PNG、JPEG、WebP、BMP、TIFF、PNM に対応します。画像が奇数寸法なら右端・下端を白で補います。透過部分は白地に重ねます。
 
 既存の出力ファイルは上書きしません。意図して上書きするときだけ `--force` を付けてください。
-
-掲載画像を作り直す場合は、`ffmpeg` で元の JPEG を 384×384 に縮小してから変換します。出力先に画像がすでにある場合に限り `--force` が必要です。
-
-```sh
-ffmpeg -y -i docs/images/taneko-source.jpg -vf scale=384:384:flags=lanczos -frames:v 1 docs/images/taneko-before.png
-pic2gray4px docs/images/taneko-before.png docs/images/taneko-after.png --force
-```
 
 ## 写りを調整する
 
