@@ -64,19 +64,23 @@ CLI / WASM は名前をそのままコアへ渡し、重みへの解決をコア
 適用値として `mixer: (f32, f32, f32)`、`tone_curve: ToneCurve`、
 `local_contrast: f32` を返す。CLI の出力行と Web の結果表示はこれを使う。
 
-### WASM 表面（convert_rgba）
+### WASM 表面
 
-末尾に引数を追加する（既存引数の順序は変えない）：
+既存の `convert_rgba` は変更しない（色調整は全て既定となり、
+従来結果とバイト一致する）。新しい関数 `convert_rgba_adjusted` を
+追加する：
 
 ```
-convert_rgba(rgba, width, height, target_width, contrast, unsharp,
-             passes, diffusion,
-             mixer_preset_name,   // string | null
-             mixer_weights,       // Float32Array(3) | null
-             tone_curve_name,     // string | null
-             local_contrast)      // number | null
+convert_rgba_adjusted(rgba, width, height, target_width, contrast,
+                      unsharp, passes, diffusion,
+                      mixer_preset_name,   // string | null
+                      mixer_weights,       // Float32Array(3) | null
+                      tone_curve_name,     // string | null
+                      local_contrast)      // number | null
 ```
 
+旧関数を残すのは互換性のため（古い JS からの呼び出しが、引数の
+意味を変えずに従来通り動く）。Web は新しい関数へ移行する。
 null は「省略」を表し、コアの既定が適用される。名前が不正なら
 エラー文字列を返す。mixer_preset_name と mixer_weights の同時指定はエラー。
 
@@ -127,6 +131,15 @@ null は「省略」を表し、コアの既定が適用される。名前が不
   384 → 6、576 → 9、250 → 4。印刷サイズに対して相対的に効くよう、
   出力幅に連動させる
 - ベースは半径 r のボックスぼかし（2パスのスライディングウィンドウ）
+- **境界処理**：窓は有効領域（valid_w × valid_h）の内側に切り取り、
+  実際に含まれる画素数で割る（外側を何かで埋めない）。既存の
+  アンシャープ（範囲外のタップを除き、残りの重みで正規化）と
+  autotune の box_blur（窓を画像内に切り取り、実画素数で割る）と
+  同じ規則に揃える
+- パディング（偶数化の白マージン）は有効領域の外なので、ぼかしの
+  入力にも調整の対象にもしない（1.0 のまま残る）。有効領域内の
+  透明画素は、白合成後の平面値を持つ通常の画素として扱う
+  （従来のパイプラインと同じ。統計と評価だけが eligible で区別する）
 - ディテール `d = v − base` に対する増幅：
 
 ```
@@ -138,7 +151,11 @@ out  = clamp01(v + amount * d * w(d))
   では増幅率が落ちてハロを抑える。amount = 1 で質感の最大増幅は
   偏差の +100%
 - amount = 0 のときは処理自体をスキップする（バイト一致の前提）
-- 追加メモリはベース平面1枚分（Web の画素数上限 400 万画素でも約 16MB）
+- 追加メモリ：ベース平面1枚（画素数×4B、400万画素で約16MB）＋
+  行リングバッファ min(h, 2r+1) 行分。横パスは行ごとに base へ書き、
+  縦パスはリングバッファ経由で base をインプレースに更新するため、
+  中間の全面バッファは持たない。通常のアスペクト比ではリングは
+  1MB 未満、極端な横長・縦長でも平面1枚分を超えない
 
 ## 6. CLI 設計
 
@@ -151,7 +168,7 @@ out  = clamp01(v + amount * d * w(d))
 ## 7. Web 設計
 
 - Worker の変換オプションに mixer / toneCurve / localContrast を追加し、
-  WASM の新引数へそのまま渡す（省略は null）
+  `convert_rgba_adjusted` へそのまま渡す（省略は null）
 - 選択 UI と上級者設定への配置は要件 §7 の通り。
   詳細は `docs/web-requirements.md` に追記する
 - リリースは appVersion 0.2.0（タグ v0.2.0）とする
@@ -166,7 +183,8 @@ out  = clamp01(v + amount * d * w(d))
   - トーンカーブ：アンカー点で定義値と一致、単調非減少、
     normal が恒等
   - 局所コントラスト：amount = 0 で恒等、一様画像で恒等
-    （偏差ゼロ）、既知の小パターンで増幅方向が正しい
+    （偏差ゼロ）、既知の小パターンで増幅方向が正しい、
+    端の窓が有効画素数で正規化される（手計算と一致）
   - 名前解決：未知の名前がエラーになる
 - CLI と WASM で同一パラメタの結果が一致すること（スモークテスト）
 
@@ -179,6 +197,8 @@ out  = clamp01(v + amount * d * w(d))
 ## 10. 設計判断の記録
 
 - 補間は区分線形（滑らかな補間は実験後に再検討）
+- ぼかしの境界は有効領域で切り取り実画素数で割る（既存処理と同一規則）
+- WASM は旧 `convert_rgba` を残し、`convert_rgba_adjusted` を追加する
 - 局所コントラストの半径規則と増幅定数（0.15）は設計値であり、
   印刷実験で動かす対象。変える場合は本書を更新する
 - 利用者向け表示名は未決（要件 §10）。内部名は本書の英語名を使う
