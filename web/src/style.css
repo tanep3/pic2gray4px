@@ -167,6 +167,39 @@ main {
   gap: 0.5rem;
 }
 
+/* The paste box: an editable drop target for the paste event (the one
+   clipboard route — see input.ts). It is not an editor; pasted content
+   is cleared by the handler, and the placeholder shows while empty. */
+.paste-box {
+  margin-top: 0.75rem;
+  border: 2px dashed var(--border);
+  border-radius: var(--radius-sm);
+  min-height: 52px;
+  background: rgba(255, 255, 255, 0.6);
+  padding: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  color: var(--ink-soft);
+  cursor: text;
+}
+
+.paste-box:empty::before {
+  content: attr(data-placeholder);
+  color: var(--ink-soft);
+  pointer-events: none;
+}
+
+.paste-box img {
+  max-width: 100%;
+}
+
+.paste-box:focus {
+  outline: 3px solid var(--lavender);
+  outline-offset: 2px;
+}
+
 button {
   font: inherit;
   font-weight: 600;

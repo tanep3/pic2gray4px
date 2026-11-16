@@ -1,5 +1,5 @@
 // Input normalization: every input route ends as a Blob handed to main —
-// file picker, drag & drop, paste (event and clipboard-read button), and
+// file picker, drag & drop, the paste event (with its paste box), and
 // the Web Share Target intake stashed by the service worker.
 
 export interface FileInputHooks {
@@ -80,66 +80,48 @@ export function wireDragAndDrop(hooks: DropHooks): void {
   });
 }
 
-/// Ctrl/Cmd+V paste. Pastes aimed at a form field (e.g. the custom width
-/// input) keep their normal text behaviour and are not hijacked.
-export function wirePaste(hooks: { onBlob: (blob: Blob) => void }): void {
+export interface PasteHooks {
+  box: HTMLElement;
+  onBlob: (blob: Blob) => void;
+}
+
+/// Clipboard: ONE route, the paste event (the shape settled in
+/// Voice2QR v1.2.2). The Async Clipboard API (clipboard.read) is NOT
+/// used: its image surface is effectively PNG-only, so a copy another
+/// app placed as a JPEG never reaches it (seen on iPad with an image
+/// copied from X). The paste event goes through the browser's legacy
+/// paste path, which tolerates JPEG and other formats. On touch
+/// devices the callout menu needs an editable target — the paste box.
+/// A page cannot paste programmatically, so the flow is: tap the box,
+/// then Paste in the callout. On PC, Ctrl+V anywhere works too (a
+/// paste without an image file is left alone, so text fields keep
+/// their normal behaviour).
+export function wirePaste(hooks: PasteHooks): void {
   document.addEventListener('paste', (event) => {
-    const target = event.target;
-    if (
-      target instanceof HTMLElement &&
-      (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName))
-    ) {
-      return;
-    }
     const data = event.clipboardData;
     if (!data) return;
-    const image =
-      firstImageFile(data.files) ??
-      Array.from(data.items)
-        .filter((item) => item.kind === 'file' && item.type.startsWith('image/'))
-        .map((item) => item.getAsFile())
-        .find((file) => file !== null) ??
-      null;
-    if (image) {
+    let file: File | null = data.files?.[0] ?? null;
+    if (file && !file.type.startsWith('image/')) file = null;
+    if (!file) {
+      for (const item of Array.from(data.items)) {
+        if (item.kind === 'file' && item.type.startsWith('image/')) {
+          file = item.getAsFile();
+          if (file) break;
+        }
+      }
+    }
+    if (file) {
       event.preventDefault();
-      hooks.onBlob(image);
+      hooks.onBlob(file);
+    }
+    // The paste box is a drop target for the event, not an editor:
+    // clear anything the browser inserted into it.
+    if (event.target instanceof Node && hooks.box.contains(event.target)) {
+      window.setTimeout(() => {
+        hooks.box.innerHTML = '';
+      }, 0);
     }
   });
-}
-
-export function canReadClipboard(): boolean {
-  return (
-    typeof navigator !== 'undefined' &&
-    !!navigator.clipboard &&
-    typeof navigator.clipboard.read === 'function'
-  );
-}
-
-export type ClipboardImageResult =
-  | { blob: Blob }
-  | { error: 'empty' | 'failed' };
-
-/// The "paste" button route: reads the clipboard on the user's tap.
-/// 'empty' = no image on the clipboard; 'failed' = read refused or
-/// unsupported (the caller suggests the file picker instead).
-export async function readClipboardImage(): Promise<ClipboardImageResult> {
-  if (!canReadClipboard()) return { error: 'failed' };
-  let items: ClipboardItem[];
-  try {
-    items = await navigator.clipboard.read();
-  } catch {
-    return { error: 'failed' };
-  }
-  for (const item of items) {
-    const type = item.types.find((t) => t.startsWith('image/'));
-    if (!type) continue;
-    try {
-      return { blob: await item.getType(type) };
-    } catch {
-      return { error: 'failed' };
-    }
-  }
-  return { error: 'empty' };
 }
 
 // --- Share-target intake -------------------------------------------------

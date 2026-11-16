@@ -11,10 +11,8 @@ import {
 import { canSharePng, savePng, sharePng } from './export';
 import { applyI18n, getLang, setLang, t, type Lang } from './i18n';
 import {
-  canReadClipboard,
   consumeSharedImage,
   decodeInMainThread,
-  readClipboardImage,
   sweepSharedImages,
   wireDragAndDrop,
   wireFilePicker,
@@ -40,7 +38,6 @@ const resultMeta = el<HTMLElement>('result-meta');
 const saveButton = el<HTMLButtonElement>('save-button');
 const shareButton = el<HTMLButtonElement>('share-button');
 const printButton = el<HTMLButtonElement>('print-button');
-const pasteButton = el<HTMLButtonElement>('paste-button');
 const zoomModal = el<HTMLElement>('zoom-modal');
 const zoomImg = el<HTMLImageElement>('zoom-img');
 const printImg = el<HTMLImageElement>('print-img');
@@ -253,19 +250,7 @@ async function init(): Promise<void> {
     onBlob,
     onInvalid: () => setStatus(t('errorPrefix') + t('fileNotImage'), true),
   });
-  wirePaste({ onBlob });
-  pasteButton.hidden = !canReadClipboard();
-  pasteButton.addEventListener('click', async () => {
-    const result = await readClipboardImage();
-    if ('blob' in result) {
-      onBlob(result.blob);
-    } else {
-      setStatus(
-        t(result.error === 'empty' ? 'clipboardNoImage' : 'clipboardFailed'),
-        true,
-      );
-    }
-  });
+  wirePaste({ box: el<HTMLElement>('paste-box'), onBlob });
   initSizeChips();
   initAdvanced();
   saveButton.addEventListener('click', () => {

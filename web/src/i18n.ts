@@ -10,8 +10,6 @@ const ja = {
   chooseFile: 'ファイルを選ぶ',
   paste: '画像を貼り付け',
   dropRelease: 'はなして読み込む',
-  clipboardNoImage: 'クリップボードに画像がありません',
-  clipboardFailed: '貼り付けできませんでした。ファイル選択を使ってください',
   share: '共有',
   print: '印刷',
   diffusionOn: '拡散あり',
@@ -53,10 +51,8 @@ const en: Record<I18nKey, string> = {
   dropHere: 'Drop an image here, or click to choose',
   dropSub: 'Convert a photo into a 2×2-cell black-and-white pattern',
   chooseFile: 'Choose a file',
-  paste: 'Paste image',
+  paste: 'Paste an image',
   dropRelease: 'Let go to load it',
-  clipboardNoImage: 'No image on the clipboard',
-  clipboardFailed: 'Could not paste. Please use the file picker instead',
   share: 'Share',
   print: 'Print',
   diffusionOn: 'diffusion on',
@@ -130,4 +126,12 @@ export function applyI18n(): void {
       element.setAttribute('aria-label', t(key));
     }
   });
+  document
+    .querySelectorAll<HTMLElement>('[data-i18n-placeholder]')
+    .forEach((element) => {
+      const key = element.dataset.i18nPlaceholder as I18nKey | undefined;
+      if (key && key in dictionaries.ja) {
+        element.setAttribute('data-placeholder', t(key));
+      }
+    });
 }
