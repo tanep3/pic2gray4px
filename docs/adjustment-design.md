@@ -171,6 +171,11 @@ out  = clamp01(v + amount * d * w(d))
   `convert_rgba_adjusted` へそのまま渡す（省略は null）
 - 選択 UI と上級者設定への配置は要件 §7 の通り。
   詳細は `docs/web-requirements.md` に追記する
+- UI の初期選択は warm × contrast で、選択肢は 3×2（カーブは
+  normal / contrast）。UI は初期選択を明示的に渡すため、コアの
+  省略時デフォルト（standard × normal）は不変
+- 局所コントラストは ON/OFF トグル（ON = 0.5）で渡し、
+  上級者設定の強さが入ればその値を優先する
 - リリースは appVersion 0.2.0（タグ v0.2.0）とする
 
 ## 8. テスト計画
@@ -204,6 +209,9 @@ out  = clamp01(v + amount * d * w(d))
   含めない方向（コアの ToneCurve には残す）
 - 実験第二報（2026-11-16）：contrast が風景・イラスト・人物でも
   支持され、全評価で優位。フェーズ2の推奨候補は warm × contrast
+- 既定の確定（2026-11-16）：Web の初期選択を warm × contrast とし、
+  選択肢は 3×2（standard / green × normal も選択可能）。
+  局所コントラストは選択欄の ON/OFF（ON = 0.5）とする
 - 局所コントラストの半径規則と増幅定数（0.15）は設計値であり、
   印刷実験で動かす対象。変える場合は本書を更新する
 - 利用者向け表示名は未決（要件 §10）。内部名は本書の英語名を使う
