@@ -5,8 +5,9 @@
 
 ## 1. 通しの動作例
 
-iPhone の写真アプリで写真（4032×3024、EXIF 回転あり）を「共有」→
-pic2gray4px Web を選んだ場合：
+Android の写真アプリで写真（4032×3024、EXIF 回転あり）を「共有」→
+pic2gray4px Web を選んだ場合（iOS は共有ターゲット未対応のため、
+貼り付け経由になる。要件 §3.1）：
 
 1. 共有 POST（multipart/form-data）が飛び、Service Worker が画像を受けて
    一時キャッシュへ置き、`./?share=1` へ 303 リダイレクトする。
@@ -17,8 +18,10 @@ pic2gray4px Web を選んだ場合：
    `convert_rgba(rgba, 4032, 3024, options{ width: 384, contrast: null,
    unsharp: null, passes: 10, diffusion: true })` が Worker 内で走る。
 5. コアは Lanczos3 で 384×288 へ縮小 → 自動調整（例：contrast 1.08 /
-   unsharp 0.35 を選択）→ 変換し、`{ width: 384, height: 288, pixels,
-   contrast_used: 1.08, unsharp_used: 0.35 }` を返す。
+   unsharp 0.5 を選択。自動調整の候補は contrast が 1.0／1.04／1.08／1.12、
+   unsharp が 0／0.25／0.5／0.75／1.0／1.25／1.5）→ 変換し、
+   `{ width: 384, height: 288, pixels,
+   contrast_used: 1.08, unsharp_used: 0.5 }` を返す。
 6. 続けて `encode_1bit_png(384, 288, pixels)` で 1-bit PNG のバイト列を作る。
 7. 画面には原画と変換結果が並び、適用値と寸法が表示される。
    「共有」から Phomemo アプリへ PNG を渡す。
@@ -118,7 +121,7 @@ contrast = `Some(1.0)`、unsharp = `Some(0.0)` に写像する。「自動」は
 | type | フィールド | 意味 |
 | --- | --- | --- |
 | `init` | `wasmBase: string` | WASM 一式のある絶対 URL。Worker は glue を動的 import し初期化する（モジュール相対で解決しない。MiniMapPrint の教訓） |
-| `convert` | `gen: number`, `blob: Blob` または `rgba: ArrayBuffer, width, height`, `options: { targetWidth: number \| null, contrast: number \| null, unsharp: number \| null, passes: number, diffusion: boolean }` | 変換要求。`contrast: null` = 自動（オフは UI が 1.0 に写像済み） |
+| `convert` | `gen: number`, `blob: Blob` または `rgba: ArrayBuffer, width, height`, `options: { targetWidth: number \| null, contrast: number \| null, unsharp: number \| null, passes: number, diffusion: boolean }` | 変換要求。`contrast: null` = 自動（オフは UI が 1.0 に写像済み）。`targetWidth: null` = リサイズなし。原画プリセットは `null` を渡し、原画幅の数値を入れて同じ寸法への Lanczos3 を走らせないこと |
 
 Worker → メイン：
 
