@@ -14,6 +14,14 @@ export interface ConvertOptions {
   unsharp: number | null;
   passes: number;
   diffusion: boolean;
+  /// Mixer preset name resolved by the core ("standard" | "warm" |
+  /// "green"); null selects the core default (standard).
+  mixerPreset: string | null;
+  /// Tone curve name resolved by the core ("normal" | "contrast" |
+  /// "lift-blacks"); null selects the core default (normal).
+  toneCurve: string | null;
+  /// Local contrast amount 0..1; 0 disables the stage.
+  localContrast: number;
 }
 
 /// Pixel budget for one conversion. The core's working planes grow
@@ -89,6 +97,9 @@ export type WorkerToMain =
       png: ArrayBuffer;
       contrastUsed: number;
       unsharpUsed: number;
+      mixerUsed: number[];
+      toneCurveUsed: string;
+      localContrastUsed: number;
       sourceWidth: number;
       sourceHeight: number;
       capped: boolean;
@@ -123,6 +134,9 @@ export type ConvertOutcome =
       png: ArrayBuffer;
       contrastUsed: number;
       unsharpUsed: number;
+      mixerUsed: number[];
+      toneCurveUsed: string;
+      localContrastUsed: number;
       sourceWidth: number;
       sourceHeight: number;
       capped: boolean;
@@ -219,6 +233,9 @@ export class ConversionClient {
         png: message.png,
         contrastUsed: message.contrastUsed,
         unsharpUsed: message.unsharpUsed,
+        mixerUsed: message.mixerUsed,
+        toneCurveUsed: message.toneCurveUsed,
+        localContrastUsed: message.localContrastUsed,
         sourceWidth: message.sourceWidth,
         sourceHeight: message.sourceHeight,
         capped: message.capped,

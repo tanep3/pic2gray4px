@@ -61,6 +61,29 @@
         </label>
       </section>
 
+      <section class="adjust-area">
+        <h2 data-i18n="adjustTitle">色調整</h2>
+        <div class="adjust-row">
+          <span class="adjust-label" data-i18n="mixerTitle">ミキサー</span>
+          <div id="mixer-chips" class="chips">
+            <button type="button" class="chip" data-mixer="standard" aria-pressed="false" data-i18n="mixerStandard">標準</button>
+            <button type="button" class="chip" data-mixer="warm" aria-pressed="true" data-i18n="mixerWarm">赤寄り</button>
+            <button type="button" class="chip" data-mixer="green" aria-pressed="false" data-i18n="mixerGreen">緑寄り</button>
+          </div>
+        </div>
+        <div class="adjust-row">
+          <span class="adjust-label" data-i18n="curveTitle">トーンカーブ</span>
+          <div id="curve-chips" class="chips">
+            <button type="button" class="chip" data-curve="normal" aria-pressed="false" data-i18n="curveNormal">ノーマル</button>
+            <button type="button" class="chip" data-curve="contrast" aria-pressed="true" data-i18n="curveContrast">明暗強調</button>
+          </div>
+        </div>
+        <label class="check-row">
+          <input id="local-check" type="checkbox" />
+          <span data-i18n="localContrast">局所コントラスト</span>
+        </label>
+      </section>
+
       <section class="previews">
         <figure class="preview-card">
           <figcaption data-i18n="sourceTitle">原画</figcaption>
@@ -119,6 +142,11 @@
             <span data-i18n="passes">最適化パス</span>
             <input id="passes-range" type="range" min="0" max="10" step="1" value="10" />
             <span id="passes-value" class="range-value"></span>
+          </label>
+          <label>
+            <span data-i18n="localStrength">局所コントラストの強さ</span>
+            <input id="local-range" type="range" min="0" max="1" step="0.05" value="0.5" />
+            <span id="local-value" class="range-value"></span>
           </label>
         </div>
       </details>

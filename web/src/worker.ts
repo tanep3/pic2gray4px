@@ -11,11 +11,14 @@ interface ConvertResultHandle {
   readonly pixels: Uint8Array;
   readonly contrast_used: number;
   readonly unsharp_used: number;
+  readonly mixer_used: Float32Array;
+  readonly tone_curve_used: string;
+  readonly local_contrast_used: number;
 }
 
 interface WasmGlue {
   default: (arg: { module_or_path: string }) => Promise<unknown>;
-  convert_rgba: (
+  convert_rgba_adjusted: (
     rgba: Uint8Array,
     width: number,
     height: number,
@@ -24,6 +27,10 @@ interface WasmGlue {
     unsharp: number | null,
     passes: number,
     diffusion: boolean,
+    mixerPresetName: string | null,
+    mixerWeights: Float32Array | null,
+    toneCurveName: string | null,
+    localContrast: number | null,
   ) => ConvertResultHandle;
   encode_1bit_png: (width: number, height: number, pixels: Uint8Array) => Uint8Array;
 }
@@ -98,7 +105,7 @@ async function handle(message: MainToWorker): Promise<void> {
     // The plan is recomputed here from the true source size so both
     // decode routes agree on the effective target width and the cap.
     const plan = planConversion(sourceWidth, sourceHeight, options.targetWidth);
-    const result = glue.convert_rgba(
+    const result = glue.convert_rgba_adjusted(
       rgba,
       rgbaWidth,
       rgbaHeight,
@@ -107,6 +114,10 @@ async function handle(message: MainToWorker): Promise<void> {
       options.unsharp,
       options.passes,
       options.diffusion,
+      options.mixerPreset,
+      null,
+      options.toneCurve,
+      options.localContrast,
     );
     const pixels = result.pixels;
     const png = glue.encode_1bit_png(result.width, result.height, pixels);
@@ -122,6 +133,9 @@ async function handle(message: MainToWorker): Promise<void> {
         png: pngBuffer,
         contrastUsed: result.contrast_used,
         unsharpUsed: result.unsharp_used,
+        mixerUsed: Array.from(result.mixer_used),
+        toneCurveUsed: result.tone_curve_used,
+        localContrastUsed: result.local_contrast_used,
         sourceWidth,
         sourceHeight,
         capped: plan.capped,

@@ -9,7 +9,7 @@ import {
   type WorkerPort,
 } from './client';
 import { canSharePng, savePng, sharePng } from './export';
-import { applyI18n, getLang, setLang, t, type Lang } from './i18n';
+import { applyI18n, getLang, setLang, t, type I18nKey, type Lang } from './i18n';
 import {
   consumeSharedImage,
   decodeInMainThread,
@@ -55,6 +55,9 @@ let lastResult: {
   height: number;
   contrastUsed: number;
   unsharpUsed: number;
+  mixerUsed: number[];
+  toneCurveUsed: string;
+  localContrastUsed: number;
   diffusion: boolean;
   capped: boolean;
 } | null = null;
@@ -86,6 +89,13 @@ function adjustmentValue(
   return Number.parseFloat(el<HTMLInputElement>(rangeId).value);
 }
 
+function pressedValue(containerId: string, attr: string): string | null {
+  const pressed = document.querySelector<HTMLElement>(
+    `#${containerId} .chip[aria-pressed="true"]`,
+  );
+  return pressed?.dataset[attr] ?? null;
+}
+
 function collectOptions(): ConvertOptions {
   const size = selectedSize();
   let targetWidth: number | null = null;
@@ -101,6 +111,11 @@ function collectOptions(): ConvertOptions {
     unsharp: adjustmentValue('unsharp-mode', 'unsharp-range', 0.0),
     passes: Number.parseInt(el<HTMLInputElement>('passes-range').value, 10),
     diffusion: el<HTMLInputElement>('diffusion-check').checked,
+    mixerPreset: pressedValue('mixer-chips', 'mixer'),
+    toneCurve: pressedValue('curve-chips', 'curve'),
+    localContrast: el<HTMLInputElement>('local-check').checked
+      ? Number.parseFloat(el<HTMLInputElement>('local-range').value)
+      : 0,
   };
 }
 
@@ -140,6 +155,9 @@ async function requestConvert(): Promise<void> {
     height: outcome.height,
     contrastUsed: outcome.contrastUsed,
     unsharpUsed: outcome.unsharpUsed,
+    mixerUsed: outcome.mixerUsed,
+    toneCurveUsed: outcome.toneCurveUsed,
+    localContrastUsed: outcome.localContrastUsed,
     diffusion: options.diffusion,
     capped: outcome.capped,
   };
@@ -156,6 +174,29 @@ async function requestConvert(): Promise<void> {
   setStatus(t('done'));
 }
 
+/// Display name for the applied mixer weights: the preset whose
+/// weights match (the core table, mirrored here for display only),
+/// or the raw weights for a custom mix.
+function mixerLabel(weights: number[]): string {
+  const presets: Array<[I18nKey, [number, number, number]]> = [
+    ['mixerStandard', [0.2126, 0.7152, 0.0722]],
+    ['mixerWarm', [0.5, 0.35, 0.15]],
+    ['mixerGreen', [0.15, 0.65, 0.2]],
+  ];
+  for (const [key, preset] of presets) {
+    if (preset.every((v, i) => Math.abs(v - (weights[i] ?? NaN)) < 1e-6)) {
+      return t(key);
+    }
+  }
+  return `(${weights.map(formatValue).join(', ')})`;
+}
+
+function curveLabel(name: string): string {
+  if (name === 'contrast') return t('curveContrast');
+  if (name === 'normal') return t('curveNormal');
+  return name;
+}
+
 function renderResultMeta(): void {
   if (!lastResult) return;
   resultMeta.textContent =
@@ -165,6 +206,10 @@ function renderResultMeta(): void {
       contrast: formatValue(lastResult.contrastUsed),
       unsharp: formatValue(lastResult.unsharpUsed),
     }) +
+    ` / ${mixerLabel(lastResult.mixerUsed)} × ${curveLabel(lastResult.toneCurveUsed)}` +
+    (lastResult.localContrastUsed > 0
+      ? ` / ${t('localContrast')} ${formatValue(lastResult.localContrastUsed)}`
+      : '') +
     ` / ${t(lastResult.diffusion ? 'diffusionOn' : 'diffusionOff')}` +
     (lastResult.capped ? ` / ${t('scaledNote')}` : '');
 }
@@ -197,6 +242,34 @@ function initSizeChips(): void {
     });
   });
   customWidthInput.addEventListener('change', () => void requestConvert());
+}
+
+function initAdjust(): void {
+  for (const containerId of ['mixer-chips', 'curve-chips']) {
+    document
+      .querySelectorAll<HTMLButtonElement>(`#${containerId} .chip`)
+      .forEach((chip) => {
+        chip.addEventListener('click', () => {
+          document
+            .querySelectorAll<HTMLButtonElement>(`#${containerId} .chip`)
+            .forEach((c) => c.setAttribute('aria-pressed', 'false'));
+          chip.setAttribute('aria-pressed', 'true');
+          void requestConvert();
+        });
+      });
+  }
+  el<HTMLInputElement>('local-check').addEventListener('change', () =>
+    void requestConvert(),
+  );
+  const localRange = el<HTMLInputElement>('local-range');
+  const localValue = el<HTMLElement>('local-value');
+  localValue.textContent = formatValue(Number.parseFloat(localRange.value));
+  localRange.addEventListener('input', () => {
+    localValue.textContent = formatValue(Number.parseFloat(localRange.value));
+  });
+  localRange.addEventListener('change', () => {
+    if (el<HTMLInputElement>('local-check').checked) void requestConvert();
+  });
 }
 
 function initAdvanced(): void {
@@ -258,6 +331,7 @@ async function init(): Promise<void> {
   });
   wirePaste({ box: el<HTMLElement>('paste-box'), onBlob });
   initSizeChips();
+  initAdjust();
   initAdvanced();
   saveButton.addEventListener('click', () => {
     if (resultPng) savePng(resultPng);

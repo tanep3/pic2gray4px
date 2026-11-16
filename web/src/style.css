@@ -273,6 +273,25 @@ button:disabled {
   margin-top: 0.5rem;
 }
 
+.adjust-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.5rem;
+}
+
+.adjust-label {
+  font-weight: 700;
+  min-width: 7em;
+}
+
+.adjust-area .check-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
 .previews {
   display: grid;
   grid-template-columns: 1fr;
