@@ -16,6 +16,54 @@ export interface ConvertOptions {
   diffusion: boolean;
 }
 
+/// Pixel budget for one conversion. The core's working planes grow
+/// linearly with pixel count (measured: an uncapped 12MP original-size
+/// conversion peaks around 1GB, a 24MP one around 2GB), which no phone
+/// browser tab survives. Above this budget the image is scaled down to
+/// the largest size that fits (see planConversion). 4MP keeps the peak
+/// within what mobile browsers tolerate, with margin to spare.
+export const MAX_CONVERSION_PIXELS = 4_000_000;
+
+export interface ConversionPlan {
+  decodeWidth: number;
+  decodeHeight: number;
+  targetWidth: number | null;
+  capped: boolean;
+}
+
+/// Decide the decode size and the effective target width for one
+/// conversion. When the requested output (the target width applied to
+/// the source, or the source itself for the original-size preset)
+/// exceeds MAX_CONVERSION_PIXELS, the source is decoded at the capped
+/// output size and converted as-is (targetWidth null): the result is
+/// the largest conversion that fits the budget, never a crash.
+export function planConversion(
+  sourceWidth: number,
+  sourceHeight: number,
+  targetWidth: number | null,
+): ConversionPlan {
+  const outWidth = targetWidth ?? sourceWidth;
+  const outHeight = Math.max(
+    1,
+    Math.round((sourceHeight * outWidth) / sourceWidth),
+  );
+  if (outWidth * outHeight <= MAX_CONVERSION_PIXELS) {
+    return {
+      decodeWidth: sourceWidth,
+      decodeHeight: sourceHeight,
+      targetWidth,
+      capped: false,
+    };
+  }
+  const scale = Math.sqrt(MAX_CONVERSION_PIXELS / (outWidth * outHeight));
+  return {
+    decodeWidth: Math.max(2, Math.floor(outWidth * scale)),
+    decodeHeight: Math.max(2, Math.floor(outHeight * scale)),
+    targetWidth: null,
+    capped: true,
+  };
+}
+
 export type MainToWorker =
   | { type: 'init'; wasmBase: string }
   | {
@@ -25,6 +73,8 @@ export type MainToWorker =
       rgba?: ArrayBuffer;
       width?: number;
       height?: number;
+      sourceWidth?: number;
+      sourceHeight?: number;
       options: ConvertOptions;
     };
 
@@ -41,6 +91,7 @@ export type WorkerToMain =
       unsharpUsed: number;
       sourceWidth: number;
       sourceHeight: number;
+      capped: boolean;
     }
   | { type: 'error'; gen: number; message: string };
 
@@ -57,6 +108,8 @@ export interface ConvertRequest {
   rgba?: ArrayBuffer;
   width?: number;
   height?: number;
+  sourceWidth?: number;
+  sourceHeight?: number;
   options: ConvertOptions;
 }
 
@@ -72,6 +125,7 @@ export type ConvertOutcome =
       unsharpUsed: number;
       sourceWidth: number;
       sourceHeight: number;
+      capped: boolean;
     }
   | { status: 'cancelled'; gen: number }
   | { status: 'error'; gen: number; message: string };
@@ -132,6 +186,8 @@ export class ConversionClient {
         rgba: request.rgba,
         width: request.width,
         height: request.height,
+        sourceWidth: request.sourceWidth,
+        sourceHeight: request.sourceHeight,
         options: request.options,
       },
       transfer,
@@ -165,6 +221,7 @@ export class ConversionClient {
         unsharpUsed: message.unsharpUsed,
         sourceWidth: message.sourceWidth,
         sourceHeight: message.sourceHeight,
+        capped: message.capped,
       });
     } else {
       entry.resolve({ status: 'error', gen: message.gen, message: message.message });

@@ -61,7 +61,7 @@ fn objective_kernel() -> [[f64; 9]; 9] {
 
 fn convolve_residual(
     out: &[f64],
-    target: &[f64],
+    read: &impl Fn(usize) -> f64,
     w: usize,
     h: usize,
     kernel: &[[f64; 9]; 9],
@@ -76,7 +76,7 @@ fn convolve_residual(
                     let nx = x as isize + kx as isize - 4;
                     if ny >= 0 && nx >= 0 && ny < h as isize && nx < w as isize {
                         let i = ny as usize * w + nx as usize;
-                        sum += (out[i] - target[i]) * k;
+                        sum += (out[i] - read(i)) * k;
                     }
                 }
             }
@@ -97,7 +97,7 @@ fn required_white(x: usize, y: usize, valid_w: usize, valid_h: usize) -> u8 {
 }
 
 fn counts(
-    target: &[f64],
+    read: &impl Fn(usize) -> f64,
     w: usize,
     h: usize,
     valid_w: usize,
@@ -117,7 +117,7 @@ fn counts(
             let y = by * 2;
             let sum: f64 = COORDS
                 .iter()
-                .map(|&(dy, dx)| target[(y + dy) * w + x + dx])
+                .map(|&(dy, dx)| read((y + dy) * w + x + dx))
                 .sum();
             let adjusted = sum + carry[cell];
             let min_count = required_white(x, y, valid_w, valid_h).count_ones() as i32;
@@ -144,7 +144,33 @@ fn counts(
     counts
 }
 
+/// Main-pipeline entry: the target plane stays f32 and is read through an
+/// accessor that widens each value to f64 (an exact conversion), so no
+/// full-size f64 copy of the plane is ever materialized.
 pub(crate) fn optimize(
+    target: &[f32],
+    w: usize,
+    h: usize,
+    valid_w: usize,
+    valid_h: usize,
+    passes: usize,
+    diffusion: bool,
+) -> Optimized {
+    optimize_impl(
+        &|i| target[i] as f64,
+        target.len(),
+        w,
+        h,
+        valid_w,
+        valid_h,
+        passes,
+        diffusion,
+    )
+}
+
+/// Exact-f64 entry (the gray8 reference path, whose target values are
+/// v/255 computed in f64 and pinned by golden tests).
+pub(crate) fn optimize_f64(
     target: &[f64],
     w: usize,
     h: usize,
@@ -153,12 +179,34 @@ pub(crate) fn optimize(
     passes: usize,
     diffusion: bool,
 ) -> Optimized {
-    assert!(w > 0 && h > 0 && w % 2 == 0 && h % 2 == 0 && target.len() == w * h);
+    optimize_impl(
+        &|i| target[i],
+        target.len(),
+        w,
+        h,
+        valid_w,
+        valid_h,
+        passes,
+        diffusion,
+    )
+}
+
+fn optimize_impl(
+    read: &impl Fn(usize) -> f64,
+    len: usize,
+    w: usize,
+    h: usize,
+    valid_w: usize,
+    valid_h: usize,
+    passes: usize,
+    diffusion: bool,
+) -> Optimized {
+    assert!(w > 0 && h > 0 && w % 2 == 0 && h % 2 == 0 && len == w * h);
     assert!(valid_w > 0 && valid_h > 0 && valid_w <= w && valid_h <= h);
     let bw = w / 2;
     let bh = h / 2;
-    let counts = counts(target, w, h, valid_w, valid_h, diffusion);
-    let mut out = vec![0.0; target.len()];
+    let counts = counts(read, w, h, valid_w, valid_h, diffusion);
+    let mut out = vec![0.0; len];
     for by in 0..bh {
         for bx in 0..bw {
             let k = counts[by * bw + bx] as usize;
@@ -181,7 +229,7 @@ pub(crate) fn optimize(
         }
     }
     let kernel = objective_kernel();
-    let mut residual = convolve_residual(&out, target, w, h, &kernel);
+    let mut residual = convolve_residual(&out, read, w, h, &kernel);
     let mut q = [[0.0; 4]; 4];
     for (a, &(ay, ax)) in COORDS.iter().enumerate() {
         for (b, &(by, bx)) in COORDS.iter().enumerate() {

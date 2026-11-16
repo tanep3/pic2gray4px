@@ -138,6 +138,9 @@ pub fn convert_with_options(
             }
         }
     }
+    // The RGBA plane is not read again (the candidate search works on the
+    // luminance plane only); release it before the search's peak.
+    drop(rgba);
     let tonal = has_tonal_range(&target, &eligible);
     let contrasts: Vec<f32> = match contrast {
         Some(v) => vec![v],
@@ -169,7 +172,7 @@ pub fn convert_with_options(
                 }
             }
             let result = optimizer::optimize(
-                &trial.iter().map(|&v| v as f64).collect::<Vec<_>>(),
+                &trial,
                 out_w as usize,
                 out_h as usize,
                 valid_w,
@@ -315,8 +318,7 @@ fn fill_luminance(rgba: &RgbaImage, stride: u32, target: &mut [f32]) {
 /// Optimize an already normalized, even-size gray image without count diffusion.
 /// This compatibility helper keeps the previous f32 API.
 pub fn optimize(target: &[f32], w: usize, h: usize, passes: usize) -> Vec<u8> {
-    let target: Vec<f64> = target.iter().map(|&v| v as f64).collect();
-    optimizer::optimize(&target, w, h, w, h, passes, false).pixels
+    optimizer::optimize(target, w, h, w, h, passes, false).pixels
 }
 
 /// Run the VM experiment optimizer on exact gray8 bytes, without preprocessing or resizing.
@@ -335,7 +337,7 @@ pub fn optimize_gray8(
         return Err("gray8 input needs positive even dimensions and width*height bytes".into());
     }
     let target: Vec<f64> = raw.iter().map(|&v| v as f64 / 255.0).collect();
-    let result = optimizer::optimize(&target, w, h, w, h, 10, diffusion);
+    let result = optimizer::optimize_f64(&target, w, h, w, h, 10, diffusion);
     Ok((result.pixels, result.changes))
 }
 

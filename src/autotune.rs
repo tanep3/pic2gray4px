@@ -1,15 +1,15 @@
 //! A bounded, deterministic proxy for the readability of a completed 1-bit image.
 
-fn box_blur(values: &[f64], w: usize, h: usize, radius: usize) -> Vec<f64> {
+fn box_blur(read: &impl Fn(usize) -> f64, len: usize, w: usize, h: usize, radius: usize) -> Vec<f64> {
     let mut sums = vec![0.0; (w + 1) * (h + 1)];
     for y in 0..h {
         let mut row = 0.0;
         for x in 0..w {
-            row += values[y * w + x];
+            row += read(y * w + x);
             sums[(y + 1) * (w + 1) + x + 1] = sums[y * (w + 1) + x + 1] + row;
         }
     }
-    let mut out = vec![0.0; values.len()];
+    let mut out = vec![0.0; len];
     for y in 0..h {
         for x in 0..w {
             let x0 = x.saturating_sub(radius);
@@ -32,21 +32,22 @@ pub(crate) fn score(
     valid_w: usize,
     valid_h: usize,
 ) -> f64 {
-    let source: Vec<f64> = original.iter().map(|&v| v as f64).collect();
-    let binary: Vec<f64> = output.iter().map(|&v| v as f64).collect();
-    let src3 = box_blur(&source, w, h, 1);
-    let out3 = box_blur(&binary, w, h, 1);
-    let src9 = box_blur(&source, w, h, 4);
-    let out9 = box_blur(&binary, w, h, 4);
+    // The f32/u8 inputs are widened to f64 on read (an exact conversion)
+    // instead of being materialized as full-size f64 planes, and the two
+    // blur scales are accumulated in separate passes so only one scale's
+    // blurred planes are alive at a time. Each accumulator still adds the
+    // same terms in the same order, so the score is bit-identical.
+    let read_source = |i: usize| original[i] as f64;
+    let read_binary = |i: usize| output[i] as f64;
+    let src3 = box_blur(&read_source, original.len(), w, h, 1);
+    let out3 = box_blur(&read_binary, output.len(), w, h, 1);
     let mut e3 = 0.0;
-    let mut e9 = 0.0;
     let mut edges = 0.0;
     let mut flat_noise = 0.0;
     for y in 0..valid_h {
         for x in 0..valid_w {
             let i = y * w + x;
             e3 += (src3[i] - out3[i]).powi(2);
-            e9 += (src9[i] - out9[i]).powi(2);
             if x + 1 < valid_w && y + 1 < valid_h {
                 let sx = src3[i + 1] - src3[i];
                 let sy = src3[i + w] - src3[i];
@@ -59,6 +60,19 @@ pub(crate) fn score(
             }
         }
     }
+    drop(src3);
+    drop(out3);
+    let src9 = box_blur(&read_source, original.len(), w, h, 4);
+    let out9 = box_blur(&read_binary, output.len(), w, h, 4);
+    let mut e9 = 0.0;
+    for y in 0..valid_h {
+        for x in 0..valid_w {
+            let i = y * w + x;
+            e9 += (src9[i] - out9[i]).powi(2);
+        }
+    }
+    drop(src9);
+    drop(out9);
     let n = (valid_w * valid_h) as f64;
     let mut false_saturated = 0.0;
     for y in (0..valid_h.saturating_sub(1)).step_by(2) {
@@ -68,10 +82,10 @@ pub(crate) fn score(
                 + output[(y + 1) * w + x]
                 + output[(y + 1) * w + x + 1];
             if sum == 0 || sum == 4 {
-                let mean = (source[y * w + x]
-                    + source[y * w + x + 1]
-                    + source[(y + 1) * w + x]
-                    + source[(y + 1) * w + x + 1])
+                let mean = (read_source(y * w + x)
+                    + read_source(y * w + x + 1)
+                    + read_source((y + 1) * w + x)
+                    + read_source((y + 1) * w + x + 1))
                     / 4.0;
                 if (0.125..0.875).contains(&mean) {
                     false_saturated += 1.0;

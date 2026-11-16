@@ -56,6 +56,7 @@ let lastResult: {
   contrastUsed: number;
   unsharpUsed: number;
   diffusion: boolean;
+  capped: boolean;
 } | null = null;
 
 function setStatus(text: string, isError = false): void {
@@ -112,11 +113,13 @@ async function requestConvert(): Promise<void> {
     request = { blob: currentBlob, options };
   } else {
     try {
-      const decoded = await decodeInMainThread(currentBlob);
+      const decoded = await decodeInMainThread(currentBlob, options.targetWidth);
       request = {
         rgba: decoded.rgba.buffer as ArrayBuffer,
         width: decoded.width,
         height: decoded.height,
+        sourceWidth: decoded.sourceWidth,
+        sourceHeight: decoded.sourceHeight,
         options,
       };
     } catch {
@@ -138,6 +141,7 @@ async function requestConvert(): Promise<void> {
     contrastUsed: outcome.contrastUsed,
     unsharpUsed: outcome.unsharpUsed,
     diffusion: options.diffusion,
+    capped: outcome.capped,
   };
   resultPng = outcome.png;
   if (resultUrl) URL.revokeObjectURL(resultUrl);
@@ -160,7 +164,9 @@ function renderResultMeta(): void {
       h: lastResult.height,
       contrast: formatValue(lastResult.contrastUsed),
       unsharp: formatValue(lastResult.unsharpUsed),
-    }) + ` / ${t(lastResult.diffusion ? 'diffusionOn' : 'diffusionOff')}`;
+    }) +
+    ` / ${t(lastResult.diffusion ? 'diffusionOn' : 'diffusionOff')}` +
+    (lastResult.capped ? ` / ${t('scaledNote')}` : '');
 }
 
 function onBlob(blob: Blob): void {

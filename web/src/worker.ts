@@ -2,6 +2,7 @@
 // Requests arrive strictly one at a time (the client's send control
 // guarantees this), so the worker simply processes them serially.
 
+import { planConversion } from './client';
 import type { MainToWorker, WorkerToMain } from './client';
 
 interface ConvertResultHandle {
@@ -72,27 +73,36 @@ async function handle(message: MainToWorker): Promise<void> {
   try {
     if (!glue) throw new Error('worker not initialized');
     let rgba: Uint8Array;
+    let rgbaWidth: number;
+    let rgbaHeight: number;
     let sourceWidth: number;
     let sourceHeight: number;
     if (message.blob) {
       if (!workerDecode) throw new Error('worker decode unavailable');
-      const decoded = await decodeBlob(message.blob);
+      const decoded = await decodeBlob(message.blob, message.options.targetWidth);
       rgba = decoded.rgba;
-      sourceWidth = decoded.width;
-      sourceHeight = decoded.height;
+      rgbaWidth = decoded.width;
+      rgbaHeight = decoded.height;
+      sourceWidth = decoded.sourceWidth;
+      sourceHeight = decoded.sourceHeight;
     } else if (message.rgba && message.width && message.height) {
       rgba = new Uint8Array(message.rgba);
-      sourceWidth = message.width;
-      sourceHeight = message.height;
+      rgbaWidth = message.width;
+      rgbaHeight = message.height;
+      sourceWidth = message.sourceWidth ?? message.width;
+      sourceHeight = message.sourceHeight ?? message.height;
     } else {
       throw new Error('convert request has neither blob nor rgba');
     }
     const { options } = message;
+    // The plan is recomputed here from the true source size so both
+    // decode routes agree on the effective target width and the cap.
+    const plan = planConversion(sourceWidth, sourceHeight, options.targetWidth);
     const result = glue.convert_rgba(
       rgba,
-      sourceWidth,
-      sourceHeight,
-      options.targetWidth,
+      rgbaWidth,
+      rgbaHeight,
+      plan.targetWidth,
       options.contrast,
       options.unsharp,
       options.passes,
@@ -114,6 +124,7 @@ async function handle(message: MainToWorker): Promise<void> {
         unsharpUsed: result.unsharp_used,
         sourceWidth,
         sourceHeight,
+        capped: plan.capped,
       },
       [pixelsBuffer, pngBuffer],
     );
@@ -128,20 +139,32 @@ async function handle(message: MainToWorker): Promise<void> {
 
 async function decodeBlob(
   blob: Blob,
-): Promise<{ rgba: Uint8Array; width: number; height: number }> {
+  targetWidth: number | null,
+): Promise<{
+  rgba: Uint8Array;
+  width: number;
+  height: number;
+  sourceWidth: number;
+  sourceHeight: number;
+}> {
   const bitmap = await createImageBitmap(blob, {
     imageOrientation: 'from-image',
   });
   try {
-    const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+    // Decode at the planned size: when the conversion is capped, the
+    // full-size canvas (and its RGBA copy) never exists at all.
+    const plan = planConversion(bitmap.width, bitmap.height, targetWidth);
+    const canvas = new OffscreenCanvas(plan.decodeWidth, plan.decodeHeight);
     const context = canvas.getContext('2d');
     if (!context) throw new Error('no 2d context in worker');
-    context.drawImage(bitmap, 0, 0);
+    context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
     const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
     return {
       rgba: new Uint8Array(imageData.data),
       width: canvas.width,
       height: canvas.height,
+      sourceWidth: bitmap.width,
+      sourceHeight: bitmap.height,
     };
   } finally {
     bitmap.close();

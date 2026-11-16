@@ -2,6 +2,8 @@
 // file picker, drag & drop, the paste event (with its paste box), and
 // the Web Share Target intake stashed by the service worker.
 
+import { planConversion } from './client';
+
 export interface FileInputHooks {
   input: HTMLInputElement;
   zone: HTMLElement;
@@ -192,25 +194,37 @@ export async function sweepSharedImages(): Promise<void> {
 
 /// Fallback decoder for environments where the worker cannot decode:
 /// decode on the main thread and hand raw RGBA to the worker instead.
-/// EXIF orientation is applied by the browser decoder.
+/// EXIF orientation is applied by the browser decoder. Like the worker
+/// decoder, it decodes at the planned size (see planConversion), so a
+/// capped conversion never materializes the full-size canvas either.
 export async function decodeInMainThread(
   blob: Blob,
-): Promise<{ rgba: Uint8Array; width: number; height: number }> {
+  targetWidth: number | null,
+): Promise<{
+  rgba: Uint8Array;
+  width: number;
+  height: number;
+  sourceWidth: number;
+  sourceHeight: number;
+}> {
   const bitmap = await createImageBitmap(blob, {
     imageOrientation: 'from-image',
   });
   try {
+    const plan = planConversion(bitmap.width, bitmap.height, targetWidth);
     const canvas = document.createElement('canvas');
-    canvas.width = bitmap.width;
-    canvas.height = bitmap.height;
+    canvas.width = plan.decodeWidth;
+    canvas.height = plan.decodeHeight;
     const context = canvas.getContext('2d');
     if (!context) throw new Error('no 2d context');
-    context.drawImage(bitmap, 0, 0);
+    context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
     const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
     return {
       rgba: new Uint8Array(imageData.data),
       width: canvas.width,
       height: canvas.height,
+      sourceWidth: bitmap.width,
+      sourceHeight: bitmap.height,
     };
   } finally {
     bitmap.close();
