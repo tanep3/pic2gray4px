@@ -26,6 +26,14 @@
   box-sizing: border-box;
 }
 
+/* The hidden attribute must always win: several components set their
+   own display (flex/block), which would otherwise override the UA's
+   [hidden] rule and make "hidden" elements permanently visible.
+   (This was the always-on update-notice bug, v0.1.0 field test.) */
+[hidden] {
+  display: none !important;
+}
+
 body {
   margin: 0;
   color: var(--ink);
