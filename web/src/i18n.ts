@@ -8,6 +8,15 @@ const ja = {
   dropHere: 'ここに画像をドロップ、またはクリックして選択',
   dropSub: '写真を 2×2 セルの白黒パターンに変換します',
   chooseFile: 'ファイルを選ぶ',
+  paste: '画像を貼り付け',
+  dropRelease: 'はなして読み込む',
+  clipboardNoImage: 'クリップボードに画像がありません',
+  clipboardFailed: '貼り付けできませんでした。ファイル選択を使ってください',
+  share: '共有',
+  print: '印刷',
+  diffusionOn: '拡散あり',
+  diffusionOff: '拡散なし',
+  zoomTitle: '変換結果の拡大',
   sizeTitle: '出力の幅',
   sizeOriginal: '原画',
   sizeCustom: 'カスタム',
@@ -44,6 +53,15 @@ const en: Record<I18nKey, string> = {
   dropHere: 'Drop an image here, or click to choose',
   dropSub: 'Convert a photo into a 2×2-cell black-and-white pattern',
   chooseFile: 'Choose a file',
+  paste: 'Paste image',
+  dropRelease: 'Let go to load it',
+  clipboardNoImage: 'No image on the clipboard',
+  clipboardFailed: 'Could not paste. Please use the file picker instead',
+  share: 'Share',
+  print: 'Print',
+  diffusionOn: 'diffusion on',
+  diffusionOff: 'diffusion off',
+  zoomTitle: 'Result, enlarged',
   sizeTitle: 'Output width',
   sizeOriginal: 'Original',
   sizeCustom: 'Custom',
@@ -104,6 +122,12 @@ export function applyI18n(): void {
     const key = element.dataset.i18n as I18nKey | undefined;
     if (key && key in dictionaries.ja) {
       element.textContent = t(key);
+    }
+  });
+  document.querySelectorAll<HTMLElement>('[data-i18n-aria]').forEach((element) => {
+    const key = element.dataset.i18nAria as I18nKey | undefined;
+    if (key && key in dictionaries.ja) {
+      element.setAttribute('aria-label', t(key));
     }
   });
 }

@@ -8,9 +8,18 @@ import {
   type ConvertRequest,
   type WorkerPort,
 } from './client';
-import { savePng } from './export';
+import { canSharePng, savePng, sharePng } from './export';
 import { applyI18n, getLang, setLang, t, type Lang } from './i18n';
-import { decodeInMainThread, wireFilePicker } from './input';
+import {
+  canReadClipboard,
+  consumeSharedImage,
+  decodeInMainThread,
+  readClipboardImage,
+  sweepSharedImages,
+  wireDragAndDrop,
+  wireFilePicker,
+  wirePaste,
+} from './input';
 import { checkForUpdate, registerServiceWorker } from './pwa';
 
 function el<T extends HTMLElement>(id: string): T {
@@ -29,6 +38,12 @@ const resultImg = el<HTMLImageElement>('result-img');
 const resultEmpty = el<HTMLElement>('result-empty');
 const resultMeta = el<HTMLElement>('result-meta');
 const saveButton = el<HTMLButtonElement>('save-button');
+const shareButton = el<HTMLButtonElement>('share-button');
+const printButton = el<HTMLButtonElement>('print-button');
+const pasteButton = el<HTMLButtonElement>('paste-button');
+const zoomModal = el<HTMLElement>('zoom-modal');
+const zoomImg = el<HTMLImageElement>('zoom-img');
+const printImg = el<HTMLImageElement>('print-img');
 const customWidthRow = el<HTMLElement>('custom-width-row');
 const customWidthInput = el<HTMLInputElement>('custom-width');
 
@@ -38,8 +53,13 @@ let currentBlob: Blob | null = null;
 let sourceUrl: string | null = null;
 let resultUrl: string | null = null;
 let resultPng: ArrayBuffer | null = null;
-let lastResult: { width: number; height: number; contrastUsed: number; unsharpUsed: number } | null =
-  null;
+let lastResult: {
+  width: number;
+  height: number;
+  contrastUsed: number;
+  unsharpUsed: number;
+  diffusion: boolean;
+} | null = null;
 
 function setStatus(text: string, isError = false): void {
   statusLine.textContent = text;
@@ -120,6 +140,7 @@ async function requestConvert(): Promise<void> {
     height: outcome.height,
     contrastUsed: outcome.contrastUsed,
     unsharpUsed: outcome.unsharpUsed,
+    diffusion: options.diffusion,
   };
   resultPng = outcome.png;
   if (resultUrl) URL.revokeObjectURL(resultUrl);
@@ -129,17 +150,20 @@ async function requestConvert(): Promise<void> {
   resultEmpty.hidden = true;
   renderResultMeta();
   saveButton.disabled = false;
+  shareButton.disabled = false;
+  printButton.disabled = false;
   setStatus(t('done'));
 }
 
 function renderResultMeta(): void {
   if (!lastResult) return;
-  resultMeta.textContent = t('resultMeta', {
-    w: lastResult.width,
-    h: lastResult.height,
-    contrast: formatValue(lastResult.contrastUsed),
-    unsharp: formatValue(lastResult.unsharpUsed),
-  });
+  resultMeta.textContent =
+    t('resultMeta', {
+      w: lastResult.width,
+      h: lastResult.height,
+      contrast: formatValue(lastResult.contrastUsed),
+      unsharp: formatValue(lastResult.unsharpUsed),
+    }) + ` / ${t(lastResult.diffusion ? 'diffusionOn' : 'diffusionOff')}`;
 }
 
 function onBlob(blob: Blob): void {
@@ -224,10 +248,55 @@ async function init(): Promise<void> {
     onBlob,
     onInvalid: () => setStatus(t('errorPrefix') + t('fileNotImage'), true),
   });
+  wireDragAndDrop({
+    zone: el<HTMLElement>('drop-zone'),
+    onBlob,
+    onInvalid: () => setStatus(t('errorPrefix') + t('fileNotImage'), true),
+  });
+  wirePaste({ onBlob });
+  pasteButton.hidden = !canReadClipboard();
+  pasteButton.addEventListener('click', async () => {
+    const result = await readClipboardImage();
+    if ('blob' in result) {
+      onBlob(result.blob);
+    } else {
+      setStatus(
+        t(result.error === 'empty' ? 'clipboardNoImage' : 'clipboardFailed'),
+        true,
+      );
+    }
+  });
   initSizeChips();
   initAdvanced();
   saveButton.addEventListener('click', () => {
     if (resultPng) savePng(resultPng);
+  });
+  shareButton.hidden = !canSharePng();
+  shareButton.addEventListener('click', async () => {
+    if (!resultPng) return;
+    const outcome = await sharePng(resultPng);
+    if (outcome === 'unsupported') savePng(resultPng);
+  });
+  printButton.addEventListener('click', () => {
+    if (!resultUrl || !lastResult) return;
+    printImg.src = resultUrl;
+    // Physical width on paper: the 576 preset targets 300dpi printers
+    // (M02S class); everything else assumes the 203dpi class (T02 etc.).
+    const dpi = selectedSize() === '576' ? 300 : 203;
+    const mm = (lastResult.width / dpi) * 25.4;
+    document.documentElement.style.setProperty('--print-width-mm', `${mm}mm`);
+    window.print();
+  });
+  resultImg.addEventListener('click', () => {
+    if (!resultUrl) return;
+    zoomImg.src = resultUrl;
+    zoomModal.hidden = false;
+  });
+  zoomModal.addEventListener('click', () => {
+    zoomModal.hidden = true;
+  });
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') zoomModal.hidden = true;
   });
   el<HTMLButtonElement>('update-reload').addEventListener('click', () =>
     window.location.reload(),
@@ -246,6 +315,12 @@ async function init(): Promise<void> {
   const wasmBase = new URL('wasm/', document.baseURI).href;
   workerDecode = await client.init(wasmBase);
   setStatus('');
+
+  // Share-target intake: if another app shared an image to us, the
+  // service worker stashed it and landed us here with ?share=<id>.
+  const shared = await consumeSharedImage();
+  if (shared) onBlob(shared);
+  void sweepSharedImages();
 }
 
 void init();

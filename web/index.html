@@ -37,10 +37,12 @@
         <div id="drop-zone" class="drop-zone" role="button" tabindex="0">
           <p class="drop-main" data-i18n="dropHere">ここに画像をドロップ、またはクリックして選択</p>
           <p class="drop-sub" data-i18n="dropSub">写真を 2×2 セルの白黒パターンに変換します</p>
+          <p class="drop-release" data-i18n="dropRelease">はなして読み込む</p>
         </div>
         <input id="file-input" type="file" accept="image/*" hidden />
         <div class="input-buttons">
           <button id="file-button" type="button" data-i18n="chooseFile">ファイルを選ぶ</button>
+          <button id="paste-button" type="button" class="ghost" data-i18n="paste">画像を貼り付け</button>
         </div>
       </section>
 
@@ -81,7 +83,9 @@
       <p id="status-line" class="status" role="status"></p>
 
       <section class="actions">
-        <button id="save-button" type="button" disabled data-i18n="save">PNG を保存</button>
+        <button id="share-button" type="button" disabled data-i18n="share">共有</button>
+        <button id="save-button" type="button" class="ghost" disabled data-i18n="save">PNG を保存</button>
+        <button id="print-button" type="button" class="ghost" disabled data-i18n="print">印刷</button>
       </section>
 
       <details class="advanced">
@@ -119,6 +123,14 @@
         </div>
       </details>
     </main>
+
+    <div id="print-sheet" aria-hidden="true">
+      <img id="print-img" alt="" />
+    </div>
+
+    <div id="zoom-modal" class="zoom-modal" hidden role="dialog" aria-modal="true" data-i18n-aria="zoomTitle">
+      <img id="zoom-img" class="pixelated" alt="" />
+    </div>
 
     <script type="module" src="./src/main.ts"></script>
   </body>

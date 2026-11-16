@@ -1,7 +1,8 @@
 // pic2gray4px Web service worker.
 // The cache name carries the app version; activate deletes only this app's
 // own older version caches. The share cache (pic2gray4px-share) is never
-// touched here — it holds in-flight share-target images (intake lands in M3).
+// touched here — it is the mailbox for share-target images: the fetch
+// handler stashes a shared image there and the app consumes it once.
 
 const VERSION = "__APP_VERSION__";
 const CACHE = `pic2gray4px-${VERSION}`;
@@ -43,10 +44,44 @@ self.addEventListener("activate", (event) => {
   );
 });
 
+// Share-target intake: static hosting cannot take a POST, so the worker
+// receives it instead. The image is stashed in the share cache under a
+// per-share key (rapid successive shares cannot overwrite each other),
+// stamped with its save time for the app's TTL sweep, and the browser is
+// redirected to the app, which consumes the image once. The image never
+// leaves the device — this cache is the whole "server" side.
+async function handleShare(request) {
+  const scope = self.registration.scope;
+  try {
+    const form = await request.formData();
+    const file = form.get("image");
+    if (file && typeof file === "object" && file.size > 0) {
+      const id = crypto.randomUUID();
+      const cache = await caches.open(SHARE_CACHE);
+      await cache.put(new URL(`shared-image/${id}`, scope).href, new Response(file, {
+        headers: {
+          "Content-Type": file.type || "application/octet-stream",
+          "x-pic2gray4px-saved-at": String(Date.now()),
+        },
+      }));
+      return Response.redirect(new URL(`?share=${id}`, scope).href, 303);
+    }
+  } catch {
+    // Malformed share: fall through to the plain redirect.
+  }
+  return Response.redirect(scope, 303);
+}
+
 self.addEventListener("fetch", (event) => {
   const { request } = event;
+  if (
+    request.method === "POST" &&
+    new URL(request.url).pathname.endsWith("/share-target")
+  ) {
+    event.respondWith(handleShare(request));
+    return;
+  }
   if (request.method !== "GET") {
-    // Share-target POST intake is added in M3.
     return;
   }
   if (request.mode === "navigate") {

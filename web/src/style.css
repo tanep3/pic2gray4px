@@ -1,17 +1,25 @@
 /* pic2gray4px Web — design tokens live here, not scattered per component.
-   M2 keeps the layout functional; the full yume-kawa polish lands in M4. */
+   Yume-kawa direction (same family as Voice2QR): pastel pink and
+   lavender, round corners, soft shadows, small sparkle accents. */
 :root {
   --bg: #fff7fb;
   --surface: #ffffff;
   --ink: #4a3040;
   --ink-soft: #8a6b7d;
   --accent: #f27ba7;
+  --accent-deep: #e7548f;
   --accent-soft: #fde3ee;
   --lavender: #c9b8f5;
+  --lavender-soft: #efe9fd;
+  --sky: #b8dcf5;
+  --butter: #ffe9a8;
   --border: #f3c9da;
   --radius: 16px;
   --radius-sm: 10px;
   --shadow: 0 4px 18px rgba(242, 123, 167, 0.14);
+  --shadow-lift: 0 8px 24px rgba(242, 123, 167, 0.22);
+  /* Set from JS before printing: the result's physical width on paper. */
+  --print-width-mm: 48mm;
 }
 
 * {
@@ -20,11 +28,17 @@
 
 body {
   margin: 0;
-  background: var(--bg);
   color: var(--ink);
   font-family: "Hiragino Maru Gothic ProN", "Hiragino Sans", "Noto Sans JP",
     system-ui, sans-serif;
   line-height: 1.5;
+  background-color: var(--bg);
+  background-image:
+    radial-gradient(circle at 12% 18%, rgba(255, 233, 168, 0.35) 0 90px, transparent 91px),
+    radial-gradient(circle at 88% 8%, rgba(184, 220, 245, 0.4) 0 110px, transparent 111px),
+    radial-gradient(circle at 78% 88%, rgba(201, 184, 245, 0.28) 0 130px, transparent 131px),
+    linear-gradient(160deg, #fff7fb 0%, #fdf1f7 55%, #f3efff 100%);
+  background-attachment: fixed;
 }
 
 .app-header {
@@ -33,8 +47,9 @@ body {
   justify-content: space-between;
   gap: 1rem;
   padding: 0.75rem 1rem;
-  background: var(--surface);
+  background: rgba(255, 255, 255, 0.88);
   border-bottom: 2px solid var(--border);
+  box-shadow: 0 2px 12px rgba(242, 123, 167, 0.08);
 }
 
 .brand {
@@ -44,8 +59,16 @@ body {
 }
 
 .brand-mark {
-  font-size: 1.6rem;
-  color: var(--accent);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.2rem;
+  height: 2.2rem;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--accent-soft), var(--lavender-soft));
+  border: 2px solid var(--border);
+  font-size: 1.25rem;
+  color: var(--accent-deep);
 }
 
 .brand h1 {
@@ -90,11 +113,24 @@ main {
   text-align: center;
   cursor: pointer;
   box-shadow: var(--shadow);
+  transition: border-color 0.15s ease, background 0.15s ease, transform 0.15s ease;
+}
+
+.drop-zone:hover {
+  border-color: var(--accent);
 }
 
 .drop-zone:focus-visible {
   outline: 3px solid var(--lavender);
   outline-offset: 2px;
+}
+
+.drop-zone.drag-over {
+  border-style: solid;
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  transform: scale(1.01);
+  box-shadow: var(--shadow-lift);
 }
 
 .drop-main {
@@ -103,9 +139,26 @@ main {
   margin: 0 0 0.25rem;
 }
 
+.drop-main::before {
+  content: "♡ ";
+  color: var(--accent);
+}
+
 .drop-sub {
   color: var(--ink-soft);
   margin: 0;
+}
+
+.drop-release {
+  display: none;
+  font-size: 1.2rem;
+  font-weight: 700;
+  color: var(--accent-deep);
+  margin: 0.5rem 0 0;
+}
+
+.drop-zone.drag-over .drop-release {
+  display: block;
 }
 
 .input-buttons {
@@ -116,18 +169,42 @@ main {
 
 button {
   font: inherit;
+  font-weight: 600;
   border: 2px solid var(--accent);
-  background: var(--accent);
+  background: linear-gradient(135deg, var(--accent), var(--accent-deep));
   color: #fff;
   border-radius: 999px;
   padding: 0.45rem 1.1rem;
   cursor: pointer;
+  transition: transform 0.12s ease, box-shadow 0.12s ease, opacity 0.12s ease;
+}
+
+button:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-lift);
+}
+
+button:active:not(:disabled) {
+  transform: translateY(0);
+  box-shadow: var(--shadow);
+}
+
+button:focus-visible {
+  outline: 3px solid var(--lavender);
+  outline-offset: 2px;
+}
+
+button.ghost {
+  background: var(--surface);
+  color: var(--accent-deep);
 }
 
 button:disabled {
   border-color: var(--border);
   background: var(--border);
+  color: #fff;
   cursor: not-allowed;
+  box-shadow: none;
 }
 
 .chips {
@@ -179,6 +256,15 @@ button:disabled {
 .preview-card figcaption {
   font-weight: 700;
   margin-bottom: 0.5rem;
+}
+
+.preview-card figcaption::before {
+  content: "✦ ";
+  color: var(--accent);
+}
+
+.preview-frame img.pixelated {
+  cursor: zoom-in;
 }
 
 .preview-frame {
@@ -268,4 +354,72 @@ input[type="number"] {
   border-radius: var(--radius-sm);
   background: var(--surface);
   color: var(--ink);
+}
+
+/* --- Result zoom modal ------------------------------------------------- */
+
+.zoom-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  background: rgba(74, 48, 64, 0.55);
+  backdrop-filter: blur(3px);
+  cursor: zoom-out;
+}
+
+.zoom-modal[hidden] {
+  display: none;
+}
+
+.zoom-modal img {
+  max-width: 94vw;
+  max-height: 92vh;
+  width: auto;
+  height: auto;
+  background: #fff;
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-lift);
+}
+
+img.pixelated {
+  image-rendering: pixelated;
+}
+
+/* --- Printing ------------------------------------------------------------
+   The print sheet holds only the result image, at the physical width
+   main computed from the output pixels and the target printer class
+   (--print-width-mm). Everything else is screen-only. */
+
+#print-sheet {
+  display: none;
+}
+
+@media print {
+  .app-header,
+  .update-notice,
+  main,
+  .zoom-modal {
+    display: none !important;
+  }
+
+  body {
+    background: #fff;
+  }
+
+  #print-sheet {
+    display: block;
+  }
+
+  #print-sheet img {
+    width: var(--print-width-mm);
+    image-rendering: pixelated;
+  }
+
+  @page {
+    margin: 5mm;
+  }
 }
