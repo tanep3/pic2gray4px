@@ -1,0 +1,271 @@
+/* pic2gray4px Web — design tokens live here, not scattered per component.
+   M2 keeps the layout functional; the full yume-kawa polish lands in M4. */
+:root {
+  --bg: #fff7fb;
+  --surface: #ffffff;
+  --ink: #4a3040;
+  --ink-soft: #8a6b7d;
+  --accent: #f27ba7;
+  --accent-soft: #fde3ee;
+  --lavender: #c9b8f5;
+  --border: #f3c9da;
+  --radius: 16px;
+  --radius-sm: 10px;
+  --shadow: 0 4px 18px rgba(242, 123, 167, 0.14);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: "Hiragino Maru Gothic ProN", "Hiragino Sans", "Noto Sans JP",
+    system-ui, sans-serif;
+  line-height: 1.5;
+}
+
+.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.75rem 1rem;
+  background: var(--surface);
+  border-bottom: 2px solid var(--border);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.brand-mark {
+  font-size: 1.6rem;
+  color: var(--accent);
+}
+
+.brand h1 {
+  font-size: 1.25rem;
+  margin: 0;
+}
+
+.header-tools {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.version {
+  color: var(--ink-soft);
+  font-size: 0.85rem;
+}
+
+.update-notice {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem 1rem;
+  background: var(--accent-soft);
+}
+
+main {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.drop-zone {
+  border: 3px dashed var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  padding: 2rem 1rem;
+  text-align: center;
+  cursor: pointer;
+  box-shadow: var(--shadow);
+}
+
+.drop-zone:focus-visible {
+  outline: 3px solid var(--lavender);
+  outline-offset: 2px;
+}
+
+.drop-main {
+  font-size: 1.1rem;
+  font-weight: 700;
+  margin: 0 0 0.25rem;
+}
+
+.drop-sub {
+  color: var(--ink-soft);
+  margin: 0;
+}
+
+.input-buttons {
+  margin-top: 0.75rem;
+  display: flex;
+  gap: 0.5rem;
+}
+
+button {
+  font: inherit;
+  border: 2px solid var(--accent);
+  background: var(--accent);
+  color: #fff;
+  border-radius: 999px;
+  padding: 0.45rem 1.1rem;
+  cursor: pointer;
+}
+
+button:disabled {
+  border-color: var(--border);
+  background: var(--border);
+  cursor: not-allowed;
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.chip {
+  background: var(--surface);
+  color: var(--ink);
+  border-color: var(--border);
+}
+
+.chip[aria-pressed="true"] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.custom-width {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+.previews {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1rem;
+}
+
+@media (min-width: 720px) {
+  .previews {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+.preview-card {
+  margin: 0;
+  background: var(--surface);
+  border: 2px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.75rem;
+  box-shadow: var(--shadow);
+}
+
+.preview-card figcaption {
+  font-weight: 700;
+  margin-bottom: 0.5rem;
+}
+
+.preview-frame {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 160px;
+  background: repeating-conic-gradient(#fdf2f7 0% 25%, #fff 0% 50%) 0 0 / 24px 24px;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.preview-frame img {
+  max-width: 100%;
+  height: auto;
+  display: block;
+}
+
+.preview-frame img.pixelated {
+  image-rendering: pixelated;
+  width: 100%;
+}
+
+.empty-note {
+  color: var(--ink-soft);
+}
+
+.meta {
+  color: var(--ink-soft);
+  font-size: 0.85rem;
+  min-height: 1.2em;
+  margin: 0.5rem 0 0;
+}
+
+.status {
+  min-height: 1.5em;
+  text-align: center;
+  color: var(--ink-soft);
+  margin: 0;
+}
+
+.status.error {
+  color: #c2255c;
+}
+
+.actions {
+  display: flex;
+  justify-content: center;
+  gap: 0.75rem;
+}
+
+.advanced {
+  background: var(--surface);
+  border: 2px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.75rem 1rem;
+}
+
+.advanced summary {
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.advanced-grid {
+  display: grid;
+  gap: 0.75rem;
+  margin-top: 0.75rem;
+}
+
+.advanced-grid label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.range-value {
+  color: var(--ink-soft);
+  min-width: 3em;
+}
+
+select,
+input[type="number"] {
+  font: inherit;
+  padding: 0.3rem 0.5rem;
+  border: 2px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--ink);
+}
