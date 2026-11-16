@@ -1,7 +1,10 @@
 //! 2×2 neighborhood gray, represented by real black and white pixels.
 
+mod adjust;
 mod autotune;
 mod optimizer;
+
+pub use adjust::{mixer_preset, ToneCurve, MIXER_PRESETS, STANDARD_MIXER};
 
 use image::{imageops, DynamicImage, RgbaImage};
 #[cfg(feature = "load-image")]
@@ -27,6 +30,14 @@ pub struct ConversionOptions {
     pub unsharp: Option<f32>,
     /// Diffuse cell white-count rounding residuals to neighboring cells.
     pub diffusion: bool,
+    /// Channel mixer weights for the color-to-gray stage.
+    /// None selects the standard preset (omission means the standard
+    /// preset, unlike contrast/unsharp where omission means search).
+    pub mixer: Option<(f32, f32, f32)>,
+    /// Tone curve for the mixed gray plane.
+    pub tone_curve: ToneCurve,
+    /// Local contrast amount 0..1; 0.0 skips the stage entirely.
+    pub local_contrast: f32,
 }
 
 pub struct ConversionResult {
@@ -35,6 +46,12 @@ pub struct ConversionResult {
     pub pixels: Vec<u8>,
     pub contrast: f32,
     pub unsharp: f32,
+    /// Mixer weights actually applied.
+    pub mixer: (f32, f32, f32),
+    /// Tone curve actually applied.
+    pub tone_curve: ToneCurve,
+    /// Local contrast amount actually applied.
+    pub local_contrast: f32,
 }
 
 impl Default for ConversionOptions {
@@ -45,6 +62,9 @@ impl Default for ConversionOptions {
             contrast: None,
             unsharp: None,
             diffusion: true,
+            mixer: None,
+            tone_curve: ToneCurve::Normal,
+            local_contrast: 0.0,
         }
     }
 }
@@ -91,12 +111,26 @@ pub fn convert_with_options(
         contrast,
         unsharp,
         diffusion,
+        mixer,
+        tone_curve,
+        local_contrast,
     } = options;
     if contrast.is_some_and(|v| !(0.0..=3.0).contains(&v) || !v.is_finite()) {
         return Err("contrast must be between 0 and 3".into());
     }
     if unsharp.is_some_and(|v| !(0.0..=2.0).contains(&v) || !v.is_finite()) {
         return Err("unsharp must be between 0 and 2".into());
+    }
+    if let Some(weights) = mixer {
+        if [weights.0, weights.1, weights.2]
+            .iter()
+            .any(|v| !v.is_finite() || !(-2.0..=2.0).contains(v))
+        {
+            return Err("mixer weights must be finite numbers between -2 and 2".into());
+        }
+    }
+    if !local_contrast.is_finite() || !(0.0..=1.0).contains(&local_contrast) {
+        return Err("local contrast must be between 0 and 1".into());
     }
     if passes > 10 {
         return Err("passes must be between 0 and 10".into());
@@ -125,11 +159,21 @@ pub fn convert_with_options(
     let len = (out_w as usize)
         .checked_mul(out_h as usize)
         .ok_or("image is too large")?;
-    let mut target = vec![1.0_f32; len];
-    fill_luminance(&rgba, out_w, &mut target);
     let valid_w = rgba.width() as usize;
     let valid_h = rgba.height() as usize;
     let stride = out_w as usize;
+    let mut target = vec![1.0_f32; len];
+    let mixer_weights = mixer.unwrap_or(STANDARD_MIXER);
+    fill_mixed(&rgba, out_w, &mut target, mixer_weights);
+    // Color adjustment front-end. The adjusted plane becomes the
+    // reference for everything downstream (tonal check, candidate
+    // search, scoring); the Rec.709 luminance is never reused.
+    if tone_curve != ToneCurve::Normal {
+        adjust::apply_tone_curve(&mut target, stride, valid_w, valid_h, tone_curve);
+    }
+    if local_contrast != 0.0 {
+        adjust::apply_local_contrast(&mut target, stride, valid_w, valid_h, local_contrast);
+    }
     let mut eligible = Vec::new();
     for y in 0..valid_h {
         for x in 0..valid_w {
@@ -207,6 +251,9 @@ pub fn convert_with_options(
         pixels,
         contrast,
         unsharp,
+        mixer: mixer_weights,
+        tone_curve,
+        local_contrast,
     })
 }
 
@@ -303,13 +350,25 @@ fn preprocess(
 
 const UNSHARP_KERNEL: [[f32; 3]; 3] = [[1.0, 2.0, 1.0], [2.0, 4.0, 2.0], [1.0, 2.0, 1.0]];
 
+/// Standard-weights fill, kept for the existing tests.
+#[cfg(test)]
 fn fill_luminance(rgba: &RgbaImage, stride: u32, target: &mut [f32]) {
+    fill_mixed(rgba, stride, target, STANDARD_MIXER);
+}
+
+fn fill_mixed(rgba: &RgbaImage, stride: u32, target: &mut [f32], weights: (f32, f32, f32)) {
+    let (wr, wg, wb) = weights;
     for y in 0..rgba.height() {
         for x in 0..rgba.width() {
             let p = rgba.get_pixel(x, y).0;
             let alpha = p[3] as f32 / 255.0;
+            // Keep the operation shape identical to the original
+            // Rec.709 expression so the standard weights reproduce the
+            // previous results bit for bit. The clamp is a no-op for
+            // the standard weights (their range is exactly [0, 1]) and
+            // only bounds custom weights.
             let luminance =
-                (0.2126 * p[0] as f32 + 0.7152 * p[1] as f32 + 0.0722 * p[2] as f32) / 255.0;
+                ((wr * p[0] as f32 + wg * p[1] as f32 + wb * p[2] as f32) / 255.0).clamp(0.0, 1.0);
             target[(y * stride + x) as usize] = luminance * alpha + 1.0 - alpha;
         }
     }
@@ -615,6 +674,132 @@ mod tests {
     fn rgba_entry_point_rejects_wrong_length() {
         assert!(convert_rgba(&[0; 10], 4, 4, ConversionOptions::default()).is_err());
         assert!(convert_rgba(&[], 0, 4, ConversionOptions::default()).is_err());
+    }
+
+    fn colorful_test_image() -> DynamicImage {
+        DynamicImage::ImageRgba8(RgbaImage::from_fn(32, 24, |x, y| {
+            if x < 10 {
+                image::Rgba([200, (40 + y * 8) as u8, 30, 255]) // warm gradient
+            } else if x < 20 {
+                image::Rgba([40, (120 + x * 4) as u8, 50, 255]) // green gradient
+            } else {
+                let v = (60 + x * 5 + y * 4) as u8;
+                image::Rgba([v, v, v, 255]) // gray ramp
+            }
+        }))
+    }
+
+    #[test]
+    fn adjustment_defaults_report_standard_and_match_explicit_standard() {
+        let image = colorful_test_image();
+        let defaulted = convert_with_options(&image, ConversionOptions::default()).unwrap();
+        assert_eq!(defaulted.mixer, STANDARD_MIXER);
+        assert_eq!(defaulted.tone_curve, ToneCurve::Normal);
+        assert_eq!(defaulted.local_contrast, 0.0);
+        let explicit = convert_with_options(
+            &image,
+            ConversionOptions {
+                mixer: Some(STANDARD_MIXER),
+                tone_curve: ToneCurve::Normal,
+                local_contrast: 0.0,
+                ..ConversionOptions::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(defaulted.pixels, explicit.pixels);
+    }
+
+    #[test]
+    fn mixer_preserves_neutral_grays() {
+        // R = G = B everywhere: every sum-to-1 mixer must agree with
+        // the standard conversion exactly.
+        let image = DynamicImage::ImageRgba8(RgbaImage::from_fn(32, 16, |x, y| {
+            let v = (30 + x * 6 + y * 3) as u8;
+            image::Rgba([v, v, v, 255])
+        }));
+        let fixed = ConversionOptions {
+            contrast: Some(1.0),
+            unsharp: Some(0.0),
+            ..ConversionOptions::default()
+        };
+        let standard = convert_with_options(&image, fixed).unwrap();
+        for name in ["warm", "green"] {
+            let mixed = convert_with_options(
+                &image,
+                ConversionOptions {
+                    mixer: mixer_preset(name),
+                    ..fixed
+                },
+            )
+            .unwrap();
+            assert_eq!(mixed.pixels, standard.pixels, "{name}");
+        }
+    }
+
+    #[test]
+    fn mixer_output_is_clamped_to_unit_range() {
+        let red = RgbaImage::from_raw(1, 1, vec![255, 0, 0, 255]).unwrap();
+        let mut target = vec![0.0; 1];
+        fill_mixed(&red, 1, &mut target, (2.0, -1.0, 0.0));
+        assert_eq!(target[0], 1.0);
+        fill_mixed(&red, 1, &mut target, (-1.0, 0.0, 0.0));
+        assert_eq!(target[0], 0.0);
+    }
+
+    #[test]
+    fn adjustment_options_are_validated() {
+        let image = colorful_test_image();
+        for options in [
+            ConversionOptions {
+                mixer: Some((2.5, 0.0, 0.0)),
+                ..ConversionOptions::default()
+            },
+            ConversionOptions {
+                mixer: Some((f32::NAN, 0.0, 0.0)),
+                ..ConversionOptions::default()
+            },
+            ConversionOptions {
+                local_contrast: 1.5,
+                ..ConversionOptions::default()
+            },
+            ConversionOptions {
+                local_contrast: -0.1,
+                ..ConversionOptions::default()
+            },
+        ] {
+            assert!(convert_with_options(&image, options).is_err());
+        }
+    }
+
+    #[test]
+    fn tone_curve_and_local_contrast_change_the_output() {
+        let image = colorful_test_image();
+        let fixed = ConversionOptions {
+            contrast: Some(1.0),
+            unsharp: Some(0.0),
+            ..ConversionOptions::default()
+        };
+        let plain = convert_with_options(&image, fixed).unwrap();
+        let lifted = convert_with_options(
+            &image,
+            ConversionOptions {
+                tone_curve: ToneCurve::LiftBlacks,
+                ..fixed
+            },
+        )
+        .unwrap();
+        assert_ne!(lifted.pixels, plain.pixels);
+        assert_eq!(lifted.tone_curve, ToneCurve::LiftBlacks);
+        let local = convert_with_options(
+            &image,
+            ConversionOptions {
+                local_contrast: 0.8,
+                ..fixed
+            },
+        )
+        .unwrap();
+        assert_ne!(local.pixels, plain.pixels);
+        assert_eq!(local.local_contrast, 0.8);
     }
 
     #[test]

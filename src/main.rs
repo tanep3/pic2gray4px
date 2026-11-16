@@ -1,14 +1,20 @@
-use pic2gray4px::{convert_with_options, load_image, write_png, ConversionOptions, Result};
+use pic2gray4px::{
+    convert_with_options, load_image, mixer_preset, write_png, ConversionOptions, Result, ToneCurve,
+};
 use std::env;
 use std::path::{Path, PathBuf};
 
 fn usage() -> &'static str {
-    "Usage: pic2gray4px <input-image> [output.png] [--width PIXELS] [--contrast auto|off|C] [--unsharp auto|off|A] [--no-diffusion] [--passes N] [--force]\n\
+    "Usage: pic2gray4px <input-image> [output.png] [--width PIXELS] [--contrast auto|off|C] [--unsharp auto|off|A] [--mixer NAME] [--tone-curve NAME] [--local-contrast A] [--no-diffusion] [--passes N] [--force]\n\
      Converts a photo to a 1-bit grayscale PNG using 2x2 neighborhood gray.\n\
      Options:\n\
        --width PIXELS  Resize proportionally before conversion (e.g. 384 for T02)\n\
        --contrast MODE Contrast auto|off|0..3 (default: auto)\n\
        --unsharp MODE  Edge sharpening auto|off|0..2 (default: auto)\n\
+       --mixer NAME    Color-to-gray mixer preset: standard|warm|green (default: standard)\n\
+       --mixer-weights R,G,B  Custom mixer weights, each -2..2 (cannot be combined with --mixer)\n\
+       --tone-curve NAME  Tone curve: normal|contrast|lift-blacks (default: normal)\n\
+       --local-contrast A  Local contrast amount 0..1 (default: 0)\n\
        --no-diffusion  Use original independent cell white counts\n\
        --passes N      Maximum optimization sweeps 0..10 (default: 10)\n\
        --force         Overwrite an existing output file\n\
@@ -25,6 +31,7 @@ fn run() -> Result<()> {
     let mut input: Option<PathBuf> = None;
     let mut output: Option<PathBuf> = None;
     let mut options = ConversionOptions::default();
+    let mut mixer_source: Option<&'static str> = None;
     let mut force = false;
     while let Some(arg) = args.next() {
         if arg == "-h" || arg == "--help" {
@@ -69,6 +76,48 @@ fn run() -> Result<()> {
                     Some(parsed)
                 }
             };
+        } else if arg == "--mixer" {
+            let value = args.next().ok_or("--mixer needs a preset name")?;
+            let name = value.to_string_lossy();
+            options.mixer = Some(mixer_preset(&name).ok_or_else(|| {
+                format!("unknown mixer preset: {name} (standard, warm, green)")
+            })?);
+            if mixer_source == Some("--mixer-weights") {
+                return Err("--mixer and --mixer-weights cannot be combined".into());
+            }
+            mixer_source = Some("--mixer");
+        } else if arg == "--mixer-weights" {
+            let value = args.next().ok_or("--mixer-weights needs \"R,G,B\"")?;
+            let text = value.to_string_lossy();
+            let parts: Vec<&str> = text.split(',').collect();
+            if parts.len() != 3 {
+                return Err("--mixer-weights needs three numbers \"R,G,B\"".into());
+            }
+            let mut weights = [0.0_f32; 3];
+            for (slot, part) in weights.iter_mut().zip(&parts) {
+                *slot = part.trim().parse()?;
+                if !slot.is_finite() || !(-2.0..=2.0).contains(slot) {
+                    return Err("--mixer-weights values must be between -2 and 2".into());
+                }
+            }
+            options.mixer = Some((weights[0], weights[1], weights[2]));
+            if mixer_source == Some("--mixer") {
+                return Err("--mixer and --mixer-weights cannot be combined".into());
+            }
+            mixer_source = Some("--mixer-weights");
+        } else if arg == "--tone-curve" {
+            let value = args.next().ok_or("--tone-curve needs a name")?;
+            let name = value.to_string_lossy();
+            options.tone_curve = ToneCurve::from_name(&name).ok_or_else(|| {
+                format!("unknown tone curve: {name} (normal, contrast, lift-blacks)")
+            })?;
+        } else if arg == "--local-contrast" {
+            let value = args.next().ok_or("--local-contrast needs a number")?;
+            let parsed: f32 = value.to_string_lossy().parse()?;
+            if !parsed.is_finite() || !(0.0..=1.0).contains(&parsed) {
+                return Err("--local-contrast must be between 0 and 1".into());
+            }
+            options.local_contrast = parsed;
         } else if arg == "--no-diffusion" {
             options.diffusion = false;
         } else if arg == "--force" {
@@ -107,10 +156,15 @@ fn run() -> Result<()> {
         force,
     )?;
     println!(
-        "{} ({}x{}, 1-bit grayscale PNG; contrast={:.2}{}; unsharp={:.2}{}; cell diffusion={})",
+        "{} ({}x{}, 1-bit grayscale PNG; mixer=({:.2}, {:.2}, {:.2}); tone-curve={}; local-contrast={:.2}; contrast={:.2}{}; unsharp={:.2}{}; cell diffusion={})",
         output.display(),
         converted.width,
         converted.height,
+        converted.mixer.0,
+        converted.mixer.1,
+        converted.mixer.2,
+        converted.tone_curve.name(),
+        converted.local_contrast,
         converted.contrast,
         if options.contrast.is_none() {
             " auto"

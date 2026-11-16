@@ -123,6 +123,75 @@ fn preprocessing_flags_are_optional_and_accepted_in_range() {
 }
 
 #[test]
+fn adjustment_flags_are_accepted_reported_and_validated() {
+    let fixture = Fixture::new();
+    let input = fixture.path("color.ppm");
+    let plain = fixture.path("plain.png");
+    let adjusted = fixture.path("adjusted.png");
+    // Warm gradient | green gradient | gray ramp, as PPM (P6).
+    let mut bytes = b"P6\n32 16\n255\n".to_vec();
+    for y in 0..16_u8 {
+        for x in 0..32_u8 {
+            let (r, g, b) = if x < 10 {
+                (200, 40 + y * 8, 30)
+            } else if x < 20 {
+                (40, 120 + x * 4, 50)
+            } else {
+                let v = 40 + x * 3 + y * 3;
+                (v, v, v)
+            };
+            bytes.extend_from_slice(&[r, g, b]);
+        }
+    }
+    fs::write(&input, &bytes).unwrap();
+
+    assert!(run(&[&input, &plain]).status.success());
+    let adjusted_run = run(&[
+        &input,
+        &adjusted,
+        Path::new("--mixer"),
+        Path::new("warm"),
+        Path::new("--tone-curve"),
+        Path::new("contrast"),
+        Path::new("--local-contrast"),
+        Path::new("0.5"),
+    ]);
+    assert!(adjusted_run.status.success());
+    let stdout = String::from_utf8_lossy(&adjusted_run.stdout);
+    assert!(stdout.contains("mixer=(0.50, 0.35, 0.15)"), "{stdout}");
+    assert!(stdout.contains("tone-curve=contrast"), "{stdout}");
+    assert!(stdout.contains("local-contrast=0.50"), "{stdout}");
+    assert_ne!(fs::read(plain).unwrap(), fs::read(adjusted).unwrap());
+
+    assert_error(
+        run(&[&input, Path::new("--mixer"), Path::new("nope")]),
+        "unknown mixer preset",
+    );
+    assert_error(
+        run(&[
+            &input,
+            Path::new("--mixer"),
+            Path::new("warm"),
+            Path::new("--mixer-weights"),
+            Path::new("1,0,0"),
+        ]),
+        "cannot be combined",
+    );
+    assert_error(
+        run(&[&input, Path::new("--mixer-weights"), Path::new("1,0")]),
+        "needs three numbers",
+    );
+    assert_error(
+        run(&[&input, Path::new("--tone-curve"), Path::new("nope")]),
+        "unknown tone curve",
+    );
+    assert_error(
+        run(&[&input, Path::new("--local-contrast"), Path::new("1.5")]),
+        "--local-contrast must be between 0 and 1",
+    );
+}
+
+#[test]
 fn off_switches_and_original_count_mode_are_reported() {
     let fixture = Fixture::new();
     let input = fixture.path("photo.pgm");
