@@ -169,12 +169,6 @@ main {
   display: block;
 }
 
-.input-buttons {
-  margin-top: 0.75rem;
-  display: flex;
-  gap: 0.5rem;
-}
-
 /* The paste box: an editable drop target for the paste event (the one
    clipboard route — see input.ts). It is not an editor; pasted content
    is cleared by the handler, and the placeholder shows while empty. */

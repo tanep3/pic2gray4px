@@ -212,3 +212,44 @@ fn off_switches_and_original_count_mode_are_reported() {
     assert!(stdout.contains("unsharp=0.00"));
     assert!(stdout.contains("cell diffusion=off"));
 }
+
+#[test]
+fn mode_flags_are_reported_and_validated() {
+    let fixture = Fixture::new();
+    let input = fixture.path("grad.pgm");
+    let mut data = b"P5\n16 8\n255\n".to_vec();
+    for _y in 0..8 {
+        for x in 0..16u8 {
+            data.push(x * 17);
+        }
+    }
+    fs::write(&input, data).unwrap();
+
+    let photo = fixture.path("photo-mode.png");
+    let result = run(&[&input, &photo, Path::new("--mode"), Path::new("photo")]);
+    assert!(result.status.success());
+    let stdout = String::from_utf8_lossy(&result.stdout);
+    assert!(stdout.contains("cell diffusion=on"), "{stdout}");
+    assert!(stdout.contains("exchange=3"), "{stdout}");
+
+    let illustration = fixture.path("illustration-mode.png");
+    let result = run(&[
+        &input,
+        &illustration,
+        Path::new("--mode"),
+        Path::new("illustration"),
+    ]);
+    assert!(result.status.success());
+    let stdout = String::from_utf8_lossy(&result.stdout);
+    assert!(stdout.contains("cell diffusion=off"), "{stdout}");
+    assert!(stdout.contains("exchange=3"), "{stdout}");
+
+    assert_error(
+        run(&[&input, Path::new("--mode"), Path::new("bogus")]),
+        "unknown mode",
+    );
+    assert_error(
+        run(&[&input, Path::new("--exchange"), Path::new("11")]),
+        "--exchange must be between 0 and 10",
+    );
+}

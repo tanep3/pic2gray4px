@@ -53,6 +53,18 @@ pic2gray4px photo.jpg another.png --contrast off --unsharp off
 
 元の VM 実験の「マスごとに白点数を独立に丸める」方式と比べるなら、`--no-diffusion --contrast off --unsharp off` を指定します。`--passes 0..10` は配置を見直す上限回数で、標準は 10 です。
 
+## 変換モード（写真／イラスト）
+
+配置を決めた後で、隣のマスと白点を融通し合う「セル間白点交換」をかけると、写真では階調が、イラストでは平坦部の綺麗さが上がります。効き方が被写体で違うため、モードとしてまとめました。
+
+```sh
+pic2gray4px photo.jpg --mode photo         # 残差拡散＋交換（階調の滑らかさ）
+pic2gray4px art.png --mode illustration    # 拡散なし＋交換（平坦部の綺麗さ）
+pic2gray4px photo.jpg --exchange 3         # 交換だけを直接指定もできる
+```
+
+交換はペアの白点合計を保存するので、全体の階調の帳尻は変わりません。詳しくは [セル間白点交換の要件](docs/exchange-requirements.md) と [設計](docs/exchange-design.md) を参照してください。
+
 詳しくは [要件定義](docs/requirements.md)、[アルゴリズム](docs/algorithm.md)、[システム設計](docs/design.md) を参照してください。
 
 Copyright (c) 2026 Tane Channel Technology. MIT License.

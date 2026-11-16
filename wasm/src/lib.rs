@@ -15,6 +15,8 @@ pub struct ConvertResult {
     mixer_used: Vec<f32>,
     tone_curve_used: String,
     local_contrast_used: f32,
+    diffusion_used: bool,
+    exchange_used: u32,
 }
 
 #[wasm_bindgen]
@@ -60,6 +62,17 @@ impl ConvertResult {
     pub fn local_contrast_used(&self) -> f32 {
         self.local_contrast_used
     }
+
+    #[wasm_bindgen(getter)]
+    pub fn diffusion_used(&self) -> bool {
+        self.diffusion_used
+    }
+
+    /// Inter-cell exchange rounds actually applied.
+    #[wasm_bindgen(getter)]
+    pub fn exchange_used(&self) -> u32 {
+        self.exchange_used
+    }
 }
 
 fn run(
@@ -68,6 +81,7 @@ fn run(
     height: u32,
     options: ConversionOptions,
 ) -> std::result::Result<ConvertResult, JsError> {
+    let diffusion_used = options.diffusion;
     let result = pic2gray4px::convert_rgba(rgba, width, height, options)
         .map_err(|e| JsError::new(&e.to_string()))?;
     Ok(ConvertResult {
@@ -79,6 +93,8 @@ fn run(
         mixer_used: vec![result.mixer.0, result.mixer.1, result.mixer.2],
         tone_curve_used: result.tone_curve.name().to_string(),
         local_contrast_used: result.local_contrast,
+        diffusion_used,
+        exchange_used: result.exchange as u32,
     })
 }
 
@@ -118,7 +134,11 @@ pub fn convert_rgba(
 /// resolved by the library (the single source of truth for the preset
 /// table); `None` for a name or amount selects the library default for
 /// that stage. `mixer_preset_name` and `mixer_weights` are mutually
-/// exclusive. See `docs/adjustment-design.md`.
+/// exclusive. `mode_name` ("photo" / "illustration") bundles the
+/// diffusion and exchange settings and overrides the `diffusion`
+/// argument; it cannot be combined with `exchange_rounds`, which sets
+/// the exchange rounds directly when no mode is given.
+/// See `docs/adjustment-design.md` and `docs/exchange-design.md`.
 #[wasm_bindgen]
 #[allow(clippy::too_many_arguments)]
 pub fn convert_rgba_adjusted(
@@ -134,12 +154,27 @@ pub fn convert_rgba_adjusted(
     mixer_weights: Option<Vec<f32>>,
     tone_curve_name: Option<String>,
     local_contrast: Option<f32>,
+    mode_name: Option<String>,
+    exchange_rounds: Option<u32>,
 ) -> std::result::Result<ConvertResult, JsError> {
     if mixer_preset_name.is_some() && mixer_weights.is_some() {
         return Err(JsError::new(
             "mixer_preset_name and mixer_weights cannot be combined",
         ));
     }
+    if mode_name.is_some() && exchange_rounds.is_some() {
+        return Err(JsError::new(
+            "mode_name and exchange_rounds cannot be combined",
+        ));
+    }
+    let (diffusion, exchange) = match mode_name {
+        Some(name) => {
+            let preset = pic2gray4px::mode_preset(&name)
+                .ok_or_else(|| JsError::new(&format!("unknown mode: {name}")))?;
+            (preset.diffusion, preset.exchange)
+        }
+        None => (diffusion, exchange_rounds.unwrap_or(0) as usize),
+    };
     let mixer = match (mixer_preset_name, mixer_weights) {
         (Some(name), _) => Some(
             pic2gray4px::mixer_preset(&name)
@@ -168,6 +203,7 @@ pub fn convert_rgba_adjusted(
             contrast,
             unsharp,
             diffusion,
+            exchange,
             mixer,
             tone_curve,
             local_contrast: local_contrast.unwrap_or(0.0),

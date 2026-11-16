@@ -17,8 +17,9 @@ pic2gray4px Web を選んだ場合（iOS は共有ターゲット未対応のた
 3. 画像 Blob を Worker へ渡す。Worker が EXIF 向きを反映してデコードし、
    RGBA（4032×3024）を取り出す。
 4. 既定サイズは原画幅。ユーザーがプリセット「384」を選ぶと世代番号が進み、
-   `convert_rgba(rgba, 4032, 3024, options{ width: 384, contrast: null,
-   unsharp: null, passes: 10, diffusion: true })` が Worker 内で走る。
+   `convert_rgba_adjusted(rgba, 4032, 3024, options{ targetWidth: 384,
+   contrast: null, unsharp: null, passes: 10, mode: 'photo', ... })`
+   が Worker 内で走る。
 5. コアは Lanczos3 で 384×288 へ縮小 → 自動調整（例：contrast 1.08 /
    unsharp 0.5 を選択。自動調整の候補は contrast が 1.0／1.04／1.08／1.12、
    unsharp が 0／0.25／0.5／0.75／1.0／1.25／1.5）→ 変換し、
@@ -53,7 +54,10 @@ pic2gray4px/            既存リポジトリ（CLI は無変更で存続）
 既存の表面（確認済み）：
 
 - `ConversionOptions { width: Option<u32>, passes: usize = 10,
-  contrast: Option<f32>, unsharp: Option<f32>, diffusion: bool = true }`
+  contrast: Option<f32>, unsharp: Option<f32>, diffusion: bool = true,
+  exchange: usize = 0, mixer / tone_curve / local_contrast（色調整） }`
+  - モード解決 `mode_preset("photo" | "illustration") -> ModePreset
+    { diffusion, exchange }` もコアが持つ（名前表が正本）。
   - `contrast: None` = 自動、`Some(1.0)` = オフ。`unsharp: None` = 自動、`Some(0.0)` = オフ。
 - `convert_with_options(&DynamicImage, ConversionOptions) -> Result<ConversionResult>`
   - 範囲検証（contrast 0〜3、unsharp 0〜2、passes 0〜10、width ≥ 1）→
@@ -102,11 +106,14 @@ CLI の挙動は変えない（既存テスト全通過＋ §6 の一致テス�
 | 関数 | 引数 | 戻り値 | エラー |
 | --- | --- | --- | --- |
 | `convert_rgba` | `rgba: &[u8]`, `width: u32`, `height: u32`, `target_width: Option<u32>`, `contrast: Option<f32>`, `unsharp: Option<f32>`, `passes: u32`, `diffusion: bool` | `ConvertResult`（下記） | ライブラリのエラー文字列をそのまま `JsError` に載せる（範囲検証など） |
+| `convert_rgba_adjusted` | 上記の引数に続き `mixer_preset_name: Option<String>`, `mixer_weights: Option<Vec<f32>>`, `tone_curve_name: Option<String>`, `local_contrast: Option<f32>`, `mode_name: Option<String>`, `exchange_rounds: Option<u32>` | `ConvertResult`（下記） | 同上。名前と値の同時指定（ミキサー、モード）はエラー。`mode_name` がある場合 `diffusion` 引数は無視される |
 | `encode_1bit_png` | `width: u32`, `height: u32`, `pixels: &[u8]` | `Vec<u8>`（PNG バイト列） | 同上（寸法と画素数の不一致など） |
 
 `ConvertResult` は `#[wasm_bindgen]` 構造体で、getter のみ：
 `width: u32` / `height: u32` / `pixels: Vec<u8>`（画素ごと 0/1） /
-`contrast_used: f32` / `unsharp_used: f32`。
+`contrast_used: f32` / `unsharp_used: f32` / `mixer_used: Vec<f32>` /
+`tone_curve_used: String` / `local_contrast_used: f32` /
+`diffusion_used: bool` / `exchange_used: u32`。
 
 注意（UI 側の写像）：上級者設定の「オフ」は CLI と同じく
 contrast = `Some(1.0)`、unsharp = `Some(0.0)` に写像する。「自動」は両方 `None`。
@@ -132,7 +139,7 @@ contrast = `Some(1.0)`、unsharp = `Some(0.0)` に写像する。「自動」は
 | type | フィールド | 意味 |
 | --- | --- | --- |
 | `init` | `wasmBase: string` | WASM 一式のある絶対 URL。Worker は glue を動的 import し初期化する（モジュール相対で解決しない。MiniMapPrint の教訓） |
-| `convert` | `gen: number`, `blob: Blob` または `rgba: ArrayBuffer, width, height`, `options: { targetWidth: number \| null, contrast: number \| null, unsharp: number \| null, passes: number, diffusion: boolean }` | 変換要求。`contrast: null` = 自動（オフは UI が 1.0 に写像済み）。`targetWidth: null` = リサイズなし。原画プリセットは `null` を渡し、原画幅の数値を入れて同じ寸法への Lanczos3 を走らせないこと |
+| `convert` | `gen: number`, `blob: Blob` または `rgba: ArrayBuffer, width, height`, `options: { targetWidth: number \| null, contrast: number \| null, unsharp: number \| null, passes: number, mode: string, mixerPreset: string \| null, toneCurve: string \| null, localContrast: number }` | 変換要求。`contrast: null` = 自動（オフは UI が 1.0 に写像済み）。`targetWidth: null` = リサイズなし。原画プリセットは `null` を渡し、原画幅の数値を入れて同じ寸法への Lanczos3 を走らせないこと。`mode` はコアの名前表で解決される |
 
 Worker → メイン：
 
@@ -216,15 +223,20 @@ Worker → メイン：
 
 1. ヘッダー：ロゴ＋アプリ名、言語切替、バージョン表示。
 2. 入力エリア（ヒーロー）：ドラッグ＆ドロップ枠を大きく置き、
-   「ファイルを選ぶ」ボタンと貼り付け受け箱を並べる。
+   貼り付け受け箱を並べる。ドロップ枠自体がクリックでファイル選択を
+   開くため、「ファイルを選ぶ」ボタンは置かない（v0.3.0 で廃止）。
 3. サイズ選択：チップ列 — 原画（初期値）／384（T02等）／576（M02S等）／
    250（E-ink）／カスタム（数値入力）。
-4. プレビュー：原画カードと結果カード。結果は `image-rendering: pixelated`、
+4. モード選択：写真／イラストのチップ列（初期値は写真）。
+   色調整（ミキサー／トーンカーブのチップ列）がその下に続く。
+5. プレビュー：原画カードと結果カード。結果は `image-rendering: pixelated`、
    タップで拡大モーダル。結果カードの下に適用値（contrast / unsharp の実値、
-   拡散、出力寸法）を出す。
-5. アクション：共有／保存／印刷。
-6. 上級者設定（`<details>` で畳む）：contrast（自動／オフ／スライダ 0〜3）、
-   unsharp（自動／オフ／スライダ 0〜2）、拡散トグル、passes（スライダ 0〜10）。
+   モード名、出力寸法）を出す。
+6. アクション：共有／保存／印刷。
+7. 上級者設定（`<details>` で畳む）：contrast（自動／オフ／スライダ 0〜3）、
+   unsharp（自動／オフ／スライダ 0〜2）、passes（スライダ 0〜10）、
+   局所コントラストの強さ（スライダ 0〜1）。拡散トグルはモードに
+   包含されるため置かない（v0.3.0 で廃止）。
    変更すると再変換が走る。
 
 デザインは Voice2QR と同じ方向性（ゆめかわ／エモ）。色・角丸・装飾の

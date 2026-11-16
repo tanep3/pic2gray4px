@@ -13,7 +13,10 @@ export interface ConvertOptions {
   contrast: number | null;
   unsharp: number | null;
   passes: number;
-  diffusion: boolean;
+  /// Conversion mode name resolved by the core ("photo" |
+  /// "illustration"); the mode bundles the diffusion and exchange
+  /// settings, so there is no separate diffusion switch.
+  mode: string;
   /// Mixer preset name resolved by the core ("standard" | "warm" |
   /// "green"); null selects the core default (standard).
   mixerPreset: string | null;
@@ -100,6 +103,8 @@ export type WorkerToMain =
       mixerUsed: number[];
       toneCurveUsed: string;
       localContrastUsed: number;
+      diffusionUsed: boolean;
+      exchangeUsed: number;
       sourceWidth: number;
       sourceHeight: number;
       capped: boolean;
@@ -137,6 +142,8 @@ export type ConvertOutcome =
       mixerUsed: number[];
       toneCurveUsed: string;
       localContrastUsed: number;
+      diffusionUsed: boolean;
+      exchangeUsed: number;
       sourceWidth: number;
       sourceHeight: number;
       capped: boolean;
@@ -236,6 +243,8 @@ export class ConversionClient {
         mixerUsed: message.mixerUsed,
         toneCurveUsed: message.toneCurveUsed,
         localContrastUsed: message.localContrastUsed,
+        diffusionUsed: message.diffusionUsed,
+        exchangeUsed: message.exchangeUsed,
         sourceWidth: message.sourceWidth,
         sourceHeight: message.sourceHeight,
         capped: message.capped,

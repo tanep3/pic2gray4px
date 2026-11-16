@@ -7,14 +7,14 @@ import { planConversion } from './client';
 export interface FileInputHooks {
   input: HTMLInputElement;
   zone: HTMLElement;
-  button: HTMLElement;
   onBlob: (blob: Blob) => void;
   onInvalid: () => void;
 }
 
 export function wireFilePicker(hooks: FileInputHooks): void {
   const open = () => hooks.input.click();
-  hooks.button.addEventListener('click', open);
+  // The drop zone itself is the picker button (click, Enter, Space):
+  // a separate "choose file" button would duplicate the same action.
   hooks.zone.addEventListener('click', open);
   hooks.zone.addEventListener('keydown', (event) => {
     if (event.key === 'Enter' || event.key === ' ') {

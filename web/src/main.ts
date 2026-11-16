@@ -58,7 +58,7 @@ let lastResult: {
   mixerUsed: number[];
   toneCurveUsed: string;
   localContrastUsed: number;
-  diffusion: boolean;
+  mode: string;
   capped: boolean;
 } | null = null;
 
@@ -110,7 +110,8 @@ function collectOptions(): ConvertOptions {
     contrast: adjustmentValue('contrast-mode', 'contrast-range', 1.0),
     unsharp: adjustmentValue('unsharp-mode', 'unsharp-range', 0.0),
     passes: Number.parseInt(el<HTMLInputElement>('passes-range').value, 10),
-    diffusion: el<HTMLInputElement>('diffusion-check').checked,
+    // The mode bundles diffusion + exchange; the core resolves it.
+    mode: pressedValue('mode-chips', 'mode') ?? 'photo',
     mixerPreset: pressedValue('mixer-chips', 'mixer'),
     toneCurve: pressedValue('curve-chips', 'curve'),
     // The strength slider is the only control: 0 means off, so there
@@ -158,7 +159,7 @@ async function requestConvert(): Promise<void> {
     mixerUsed: outcome.mixerUsed,
     toneCurveUsed: outcome.toneCurveUsed,
     localContrastUsed: outcome.localContrastUsed,
-    diffusion: options.diffusion,
+    mode: options.mode,
     capped: outcome.capped,
   };
   resultPng = outcome.png;
@@ -210,7 +211,7 @@ function renderResultMeta(): void {
     (lastResult.localContrastUsed > 0
       ? ` / ${t('localContrast')} ${formatValue(lastResult.localContrastUsed)}`
       : '') +
-    ` / ${t(lastResult.diffusion ? 'diffusionOn' : 'diffusionOff')}` +
+    ` / ${t('modeTitle')}: ${t(lastResult.mode === 'illustration' ? 'modeIllustration' : 'modePhoto')}` +
     (lastResult.capped ? ` / ${t('scaledNote')}` : '');
 }
 
@@ -245,7 +246,7 @@ function initSizeChips(): void {
 }
 
 function initAdjust(): void {
-  for (const containerId of ['mixer-chips', 'curve-chips']) {
+  for (const containerId of ['mode-chips', 'mixer-chips', 'curve-chips']) {
     document
       .querySelectorAll<HTMLButtonElement>(`#${containerId} .chip`)
       .forEach((chip) => {
@@ -297,9 +298,6 @@ function initAdvanced(): void {
     passesValue.textContent = passes.value;
   });
   passes.addEventListener('change', () => void requestConvert());
-  el<HTMLInputElement>('diffusion-check').addEventListener('change', () =>
-    void requestConvert(),
-  );
 }
 
 async function init(): Promise<void> {
@@ -315,7 +313,6 @@ async function init(): Promise<void> {
   wireFilePicker({
     input: el<HTMLInputElement>('file-input'),
     zone: el<HTMLElement>('drop-zone'),
-    button: el<HTMLButtonElement>('file-button'),
     onBlob,
     onInvalid: () => setStatus(t('errorPrefix') + t('fileNotImage'), true),
   });

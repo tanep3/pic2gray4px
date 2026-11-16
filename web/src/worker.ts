@@ -14,6 +14,8 @@ interface ConvertResultHandle {
   readonly mixer_used: Float32Array;
   readonly tone_curve_used: string;
   readonly local_contrast_used: number;
+  readonly diffusion_used: boolean;
+  readonly exchange_used: number;
 }
 
 interface WasmGlue {
@@ -31,6 +33,8 @@ interface WasmGlue {
     mixerWeights: Float32Array | null,
     toneCurveName: string | null,
     localContrast: number | null,
+    modeName: string | null,
+    exchangeRounds: number | null,
   ) => ConvertResultHandle;
   encode_1bit_png: (width: number, height: number, pixels: Uint8Array) => Uint8Array;
 }
@@ -113,11 +117,15 @@ async function handle(message: MainToWorker): Promise<void> {
       options.contrast,
       options.unsharp,
       options.passes,
-      options.diffusion,
+      // Ignored: the mode argument below overrides diffusion (the
+      // core resolves the mode's bundle).
+      true,
       options.mixerPreset,
       null,
       options.toneCurve,
       options.localContrast,
+      options.mode,
+      null,
     );
     const pixels = result.pixels;
     const png = glue.encode_1bit_png(result.width, result.height, pixels);
@@ -136,6 +144,8 @@ async function handle(message: MainToWorker): Promise<void> {
         mixerUsed: Array.from(result.mixer_used),
         toneCurveUsed: result.tone_curve_used,
         localContrastUsed: result.local_contrast_used,
+        diffusionUsed: result.diffusion_used,
+        exchangeUsed: result.exchange_used,
         sourceWidth,
         sourceHeight,
         capped: plan.capped,

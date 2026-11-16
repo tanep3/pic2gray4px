@@ -155,6 +155,7 @@ pub(crate) fn optimize(
     valid_h: usize,
     passes: usize,
     diffusion: bool,
+    exchange: usize,
 ) -> Optimized {
     optimize_impl(
         &|i| target[i] as f64,
@@ -165,6 +166,7 @@ pub(crate) fn optimize(
         valid_h,
         passes,
         diffusion,
+        exchange,
     )
 }
 
@@ -178,6 +180,7 @@ pub(crate) fn optimize_f64(
     valid_h: usize,
     passes: usize,
     diffusion: bool,
+    exchange: usize,
 ) -> Optimized {
     optimize_impl(
         &|i| target[i],
@@ -188,6 +191,7 @@ pub(crate) fn optimize_f64(
         valid_h,
         passes,
         diffusion,
+        exchange,
     )
 }
 
@@ -200,12 +204,13 @@ fn optimize_impl(
     valid_h: usize,
     passes: usize,
     diffusion: bool,
+    exchange: usize,
 ) -> Optimized {
     assert!(w > 0 && h > 0 && w % 2 == 0 && h % 2 == 0 && len == w * h);
     assert!(valid_w > 0 && valid_h > 0 && valid_w <= w && valid_h <= h);
     let bw = w / 2;
     let bh = h / 2;
-    let counts = counts(read, w, h, valid_w, valid_h, diffusion);
+    let mut counts = counts(read, w, h, valid_w, valid_h, diffusion);
     let mut out = vec![0.0; len];
     for by in 0..bh {
         for bx in 0..bw {
@@ -308,8 +313,242 @@ fn optimize_impl(
             break;
         }
     }
+    // Inter-cell white-dot exchange (cell-constrained DBS): adjacent
+    // cells may trade one white dot — the pair's total is preserved —
+    // when the joint placement of the pair lowers the same perceptual
+    // cost the placement pass minimizes. Counts move; the tonal
+    // bookkeeping stays with the count stage. Each exchange round is
+    // followed by placement-only polish sweeps.
+    for round in 0..exchange {
+        let n = exchange_sweep(
+            &mut out,
+            &mut counts,
+            &mut residual,
+            &kernel,
+            w,
+            h,
+            valid_w,
+            valid_h,
+            round % 2 == 1,
+        );
+        if n == 0 {
+            break;
+        }
+        placement_polish(
+            &mut out, &counts, &mut residual, &kernel, &q, w, h, valid_w, valid_h,
+        );
+    }
     Optimized {
         pixels: out.into_iter().map(|p| p as u8).collect(),
         changes,
     }
+}
+
+/// Placement-only sweeps until convergence, used to polish after an
+/// exchange round. Mirrors the sweep loop in optimize_impl.
+fn placement_polish(
+    out: &mut [f64],
+    counts: &[u8],
+    residual: &mut [f64],
+    kernel: &[[f64; 9]; 9],
+    q: &[[f64; 4]; 4],
+    w: usize,
+    h: usize,
+    valid_w: usize,
+    valid_h: usize,
+) {
+    let bw = w / 2;
+    for sweep in 0..10 {
+        let mut changed = 0;
+        for step in 0..counts.len() {
+            let cell = if sweep % 2 == 0 {
+                step
+            } else {
+                counts.len() - 1 - step
+            };
+            let bx = cell % bw;
+            let by = cell / bw;
+            let k = counts[cell];
+            if k == 0 || k == 4 {
+                continue;
+            }
+            let x = bx * 2;
+            let y = by * 2;
+            let required = required_white(x, y, valid_w, valid_h);
+            let mut current = [0.0; 4];
+            let mut r = [0.0; 4];
+            for (bit, &(dy, dx)) in COORDS.iter().enumerate() {
+                current[bit] = out[(y + dy) * w + x + dx];
+                r[bit] = residual[(y + dy) * w + x + dx];
+            }
+            let mut best_pattern = 0;
+            let mut best_cost = f64::INFINITY;
+            let mut best_delta = [0.0; 4];
+            for pattern in 0..16_u8 {
+                if pattern.count_ones() != k as u32 || pattern & required != required {
+                    continue;
+                }
+                let mut delta = [0.0; 4];
+                for bit in 0..4 {
+                    delta[bit] = value(pattern, bit) - current[bit];
+                }
+                let linear: f64 = (0..4).map(|i| delta[i] * r[i]).sum();
+                let quadratic: f64 = (0..4)
+                    .map(|i| (0..4).map(|j| delta[i] * q[i][j] * delta[j]).sum::<f64>())
+                    .sum();
+                let cost = 2.0 * linear + quadratic;
+                if cost < best_cost {
+                    best_cost = cost;
+                    best_pattern = pattern;
+                    best_delta = delta;
+                }
+            }
+            if best_cost >= -1e-10 {
+                continue;
+            }
+            changed += 1;
+            for (bit, &(dy, dx)) in COORDS.iter().enumerate() {
+                out[(y + dy) * w + x + dx] = value(best_pattern, bit);
+                let v = best_delta[bit];
+                if v == 0.0 {
+                    continue;
+                }
+                let cy = y + dy;
+                let cx = x + dx;
+                for py in cy.saturating_sub(4)..=(cy + 4).min(h - 1) {
+                    for px in cx.saturating_sub(4)..=(cx + 4).min(w - 1) {
+                        residual[py * w + px] += v * kernel
+                            [(py as isize - cy as isize + 4) as usize]
+                            [(px as isize - cx as isize + 4) as usize];
+                    }
+                }
+            }
+        }
+        if changed == 0 {
+            break;
+        }
+    }
+}
+
+/// One sweep of inter-cell white-dot
+/// exchanges. For each orthogonally adjacent cell pair, both transfer
+/// directions (one dot A->B, one dot B->A) are evaluated jointly over
+/// all pattern pairs for the new counts, scored with the exact
+/// objective change (the same residual/quadratic form as placement).
+/// The pair's total white count is preserved; per-cell counts stay
+/// within [required-white floor, 4]. Returns the number of exchanges
+/// applied.
+#[allow(clippy::too_many_arguments)]
+fn exchange_sweep(
+    out: &mut [f64],
+    counts: &mut [u8],
+    residual: &mut [f64],
+    kernel: &[[f64; 9]; 9],
+    w: usize,
+    h: usize,
+    valid_w: usize,
+    valid_h: usize,
+    reverse: bool,
+) -> usize {
+    let bw = w / 2;
+    let bh = h / 2;
+    let total = bw * bh;
+    let mut exchanges = 0;
+    for step in 0..total {
+        let cell = if reverse { total - 1 - step } else { step };
+        let bx = cell % bw;
+        let by = cell / bw;
+        for (nx, ny) in [(bx + 1, by), (bx, by + 1)] {
+            if nx >= bw || ny >= bh {
+                continue;
+            }
+            let ncell = ny * bw + nx;
+            let (ax, ay) = (bx * 2, by * 2);
+            let (ox, oy) = (nx * 2, ny * 2);
+            let req_a = required_white(ax, ay, valid_w, valid_h);
+            let req_b = required_white(ox, oy, valid_w, valid_h);
+            let min_a = req_a.count_ones() as i32;
+            let min_b = req_b.count_ones() as i32;
+            let ka = counts[cell] as i32;
+            let kb = counts[ncell] as i32;
+            // The 8 pixel positions of the pair: A's 4, then B's 4.
+            let mut pos = [(0usize, 0usize); 8];
+            for (bit, &(dy, dx)) in COORDS.iter().enumerate() {
+                pos[bit] = (ay + dy, ax + dx);
+                pos[4 + bit] = (oy + dy, ox + dx);
+            }
+            let mut cur = [0.0; 8];
+            let mut r = [0.0; 8];
+            for (i, &(py, px)) in pos.iter().enumerate() {
+                cur[i] = out[py * w + px];
+                r[i] = residual[py * w + px];
+            }
+            let mut q8 = [[0.0; 8]; 8];
+            for i in 0..8 {
+                for j in 0..8 {
+                    q8[i][j] = kernel[(4 + pos[i].0 as isize - pos[j].0 as isize) as usize]
+                        [(4 + pos[i].1 as isize - pos[j].1 as isize) as usize];
+                }
+            }
+            let mut best: Option<(f64, u8, u8, i32, i32)> = None;
+            for (nka, nkb) in [(ka - 1, kb + 1), (ka + 1, kb - 1)] {
+                if nka < min_a || nka > 4 || nkb < min_b || nkb > 4 {
+                    continue;
+                }
+                for pa in 0..16_u8 {
+                    if pa.count_ones() != nka as u32 || pa & req_a != req_a {
+                        continue;
+                    }
+                    for pb in 0..16_u8 {
+                        if pb.count_ones() != nkb as u32 || pb & req_b != req_b {
+                            continue;
+                        }
+                        let mut delta = [0.0; 8];
+                        for bit in 0..4 {
+                            delta[bit] = value(pa, bit) - cur[bit];
+                            delta[4 + bit] = value(pb, bit) - cur[4 + bit];
+                        }
+                        let linear: f64 = (0..8).map(|i| delta[i] * r[i]).sum();
+                        let quadratic: f64 = (0..8)
+                            .map(|i| {
+                                (0..8).map(|j| delta[i] * q8[i][j] * delta[j]).sum::<f64>()
+                            })
+                            .sum();
+                        let cost = 2.0 * linear + quadratic;
+                        if best.as_ref().is_none_or(|(c, _, _, _, _)| cost < *c) {
+                            best = Some((cost, pa, pb, nka, nkb));
+                        }
+                    }
+                }
+            }
+            let Some((cost, pa, pb, nka, nkb)) = best else {
+                continue;
+            };
+            if cost >= -1e-10 {
+                continue;
+            }
+            exchanges += 1;
+            counts[cell] = nka as u8;
+            counts[ncell] = nkb as u8;
+            for bit in 0..4 {
+                for (pattern, off) in [(pa, 0), (pb, 4)] {
+                    let (py, px) = pos[off + bit];
+                    let new_v = value(pattern, bit);
+                    let v = new_v - out[py * w + px];
+                    out[py * w + px] = new_v;
+                    if v == 0.0 {
+                        continue;
+                    }
+                    for ry in py.saturating_sub(4)..=(py + 4).min(h - 1) {
+                        for rx in px.saturating_sub(4)..=(px + 4).min(w - 1) {
+                            residual[ry * w + rx] += v * kernel
+                                [(ry as isize - py as isize + 4) as usize]
+                                [(rx as isize - px as isize + 4) as usize];
+                        }
+                    }
+                }
+            }
+        }
+    }
+    exchanges
 }

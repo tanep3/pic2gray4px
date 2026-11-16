@@ -1,11 +1,12 @@
 use pic2gray4px::{
-    convert_with_options, load_image, mixer_preset, write_png, ConversionOptions, Result, ToneCurve,
+    convert_with_options, load_image, mixer_preset, mode_preset, write_png, ConversionOptions,
+    Result, ToneCurve,
 };
 use std::env;
 use std::path::{Path, PathBuf};
 
 fn usage() -> &'static str {
-    "Usage: pic2gray4px <input-image> [output.png] [--width PIXELS] [--contrast auto|off|C] [--unsharp auto|off|A] [--mixer NAME] [--tone-curve NAME] [--local-contrast A] [--no-diffusion] [--passes N] [--force]\n\
+    "Usage: pic2gray4px <input-image> [output.png] [--width PIXELS] [--contrast auto|off|C] [--unsharp auto|off|A] [--mixer NAME] [--tone-curve NAME] [--local-contrast A] [--no-diffusion] [--exchange N] [--mode NAME] [--passes N] [--force]\n\
      Converts a photo to a 1-bit grayscale PNG using 2x2 neighborhood gray.\n\
      Options:\n\
        --width PIXELS  Resize proportionally before conversion (e.g. 384 for T02)\n\
@@ -16,6 +17,8 @@ fn usage() -> &'static str {
        --tone-curve NAME  Tone curve: normal|contrast|lift-blacks (default: normal)\n\
        --local-contrast A  Local contrast amount 0..1 (default: 0)\n\
        --no-diffusion  Use original independent cell white counts\n\
+       --exchange N    Inter-cell white-dot exchange rounds 0..10 (default: 0)\n\
+       --mode NAME     Mode preset: photo (diffusion + exchange) | illustration (exchange only)\n\
        --passes N      Maximum optimization sweeps 0..10 (default: 10)\n\
        --force         Overwrite an existing output file\n\
        -h, --help      Show this help"
@@ -120,6 +123,20 @@ fn run() -> Result<()> {
             options.local_contrast = parsed;
         } else if arg == "--no-diffusion" {
             options.diffusion = false;
+        } else if arg == "--exchange" {
+            let value = args.next().ok_or("--exchange needs an integer")?;
+            options.exchange = value.to_string_lossy().parse()?;
+            if options.exchange > 10 {
+                return Err("--exchange must be between 0 and 10".into());
+            }
+        } else if arg == "--mode" {
+            let value = args.next().ok_or("--mode needs a name")?;
+            let name = value.to_string_lossy();
+            let preset = mode_preset(&name).ok_or_else(|| {
+                format!("unknown mode: {name} (photo, illustration)")
+            })?;
+            options.diffusion = preset.diffusion;
+            options.exchange = preset.exchange;
         } else if arg == "--force" {
             force = true;
         } else if arg.to_string_lossy().starts_with('-') {
@@ -156,7 +173,7 @@ fn run() -> Result<()> {
         force,
     )?;
     println!(
-        "{} ({}x{}, 1-bit grayscale PNG; mixer=({:.2}, {:.2}, {:.2}); tone-curve={}; local-contrast={:.2}; contrast={:.2}{}; unsharp={:.2}{}; cell diffusion={})",
+        "{} ({}x{}, 1-bit grayscale PNG; mixer=({:.2}, {:.2}, {:.2}); tone-curve={}; local-contrast={:.2}; contrast={:.2}{}; unsharp={:.2}{}; cell diffusion={}; exchange={})",
         output.display(),
         converted.width,
         converted.height,
@@ -177,7 +194,8 @@ fn run() -> Result<()> {
         } else {
             ""
         },
-        if options.diffusion { "on" } else { "off" }
+        if options.diffusion { "on" } else { "off" },
+        converted.exchange
     );
     Ok(())
 }

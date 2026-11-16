@@ -6,6 +6,39 @@ mod optimizer;
 
 pub use adjust::{mixer_preset, ToneCurve, MIXER_PRESETS, STANDARD_MIXER};
 
+/// A named conversion mode: a bundle of the diffusion and exchange
+/// settings that suit a class of input. Modes are resolved by the core
+/// so the CLI, the Web app, and library callers share one definition.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ModePreset {
+    /// Cell white-count diffusion on/off.
+    pub diffusion: bool,
+    /// Inter-cell white-dot exchange rounds.
+    pub exchange: usize,
+}
+
+/// Exchange rounds applied by both named modes. Measured on the
+/// comparison set: round 2 captures most of the gain and round 3 a
+/// small consistent tail; the judged comparison sheets used 3.
+pub const MODE_EXCHANGE_ROUNDS: usize = 3;
+
+/// Resolve a mode name ("photo" / "illustration") to its settings.
+/// - photo: diffusion on + exchange — smooth tonal gradation wins.
+/// - illustration: diffusion off + exchange — flat areas stay clean.
+pub fn mode_preset(name: &str) -> Option<ModePreset> {
+    match name {
+        "photo" => Some(ModePreset {
+            diffusion: true,
+            exchange: MODE_EXCHANGE_ROUNDS,
+        }),
+        "illustration" => Some(ModePreset {
+            diffusion: false,
+            exchange: MODE_EXCHANGE_ROUNDS,
+        }),
+        _ => None,
+    }
+}
+
 use image::{imageops, DynamicImage, RgbaImage};
 #[cfg(feature = "load-image")]
 use image::{ImageDecoder, ImageReader};
@@ -30,6 +63,11 @@ pub struct ConversionOptions {
     pub unsharp: Option<f32>,
     /// Diffuse cell white-count rounding residuals to neighboring cells.
     pub diffusion: bool,
+    /// Inter-cell white-dot exchange rounds (0 disables). Adjacent cells
+    /// may trade one white dot — the pair's total is preserved — when the
+    /// joint placement lowers the perceptual cost. Applied once, to the
+    /// winning candidate only, after the contrast/unsharp search.
+    pub exchange: usize,
     /// Channel mixer weights for the color-to-gray stage.
     /// None selects the standard preset (omission means the standard
     /// preset, unlike contrast/unsharp where omission means search).
@@ -52,6 +90,8 @@ pub struct ConversionResult {
     pub tone_curve: ToneCurve,
     /// Local contrast amount actually applied.
     pub local_contrast: f32,
+    /// Exchange rounds actually applied.
+    pub exchange: usize,
 }
 
 impl Default for ConversionOptions {
@@ -62,6 +102,7 @@ impl Default for ConversionOptions {
             contrast: None,
             unsharp: None,
             diffusion: true,
+            exchange: 0,
             mixer: None,
             tone_curve: ToneCurve::Normal,
             local_contrast: 0.0,
@@ -111,6 +152,7 @@ pub fn convert_with_options(
         contrast,
         unsharp,
         diffusion,
+        exchange,
         mixer,
         tone_curve,
         local_contrast,
@@ -215,6 +257,10 @@ pub fn convert_with_options(
                     continue;
                 }
             }
+            // The candidate search always runs without exchange: scores
+            // stay comparable across candidates, and the exchange stage
+            // (which improves every candidate in the same direction) is
+            // applied once, to the winner only, below.
             let result = optimizer::optimize(
                 &trial,
                 out_w as usize,
@@ -223,6 +269,7 @@ pub fn convert_with_options(
                 valid_h,
                 passes,
                 diffusion,
+                0,
             );
             let score = if contrast.is_none() || unsharp.is_none() {
                 autotune::score(
@@ -245,6 +292,27 @@ pub fn convert_with_options(
         }
     }
     let (_, contrast, unsharp, pixels) = best.expect("unadjusted candidate must be available");
+    let pixels = if exchange > 0 {
+        // Rebuild the winning candidate's plane (preprocessing is
+        // deterministic) and re-run its optimization with exchange.
+        let mut contrasted = target.clone();
+        preprocess(&mut contrasted, stride, valid_w, valid_h, contrast, 0.0);
+        let mut trial = contrasted;
+        preprocess(&mut trial, stride, valid_w, valid_h, 1.0, unsharp);
+        optimizer::optimize(
+            &trial,
+            out_w as usize,
+            out_h as usize,
+            valid_w,
+            valid_h,
+            passes,
+            diffusion,
+            exchange,
+        )
+        .pixels
+    } else {
+        pixels
+    };
     Ok(ConversionResult {
         width: out_w,
         height: out_h,
@@ -254,6 +322,7 @@ pub fn convert_with_options(
         mixer: mixer_weights,
         tone_curve,
         local_contrast,
+        exchange,
     })
 }
 
@@ -377,7 +446,7 @@ fn fill_mixed(rgba: &RgbaImage, stride: u32, target: &mut [f32], weights: (f32, 
 /// Optimize an already normalized, even-size gray image without count diffusion.
 /// This compatibility helper keeps the previous f32 API.
 pub fn optimize(target: &[f32], w: usize, h: usize, passes: usize) -> Vec<u8> {
-    optimizer::optimize(target, w, h, w, h, passes, false).pixels
+    optimizer::optimize(target, w, h, w, h, passes, false, 0).pixels
 }
 
 /// Run the VM experiment optimizer on exact gray8 bytes, without preprocessing or resizing.
@@ -396,7 +465,7 @@ pub fn optimize_gray8(
         return Err("gray8 input needs positive even dimensions and width*height bytes".into());
     }
     let target: Vec<f64> = raw.iter().map(|&v| v as f64 / 255.0).collect();
-    let result = optimizer::optimize_f64(&target, w, h, w, h, 10, diffusion);
+    let result = optimizer::optimize_f64(&target, w, h, w, h, 10, diffusion, 0);
     Ok((result.pixels, result.changes))
 }
 
@@ -800,6 +869,51 @@ mod tests {
         .unwrap();
         assert_ne!(local.pixels, plain.pixels);
         assert_eq!(local.local_contrast, 0.8);
+    }
+
+    #[test]
+    fn exchange_preserves_white_total_and_changes_pixels() {
+        // A smooth gradient: neighbouring cells have room to trade dots.
+        let (w, h) = (96u32, 64u32);
+        let mut rgba = Vec::with_capacity((w * h * 4) as usize);
+        for _y in 0..h {
+            for x in 0..w {
+                let v = ((x * 255) / (w - 1)) as u8;
+                rgba.extend_from_slice(&[v, v, v, 255]);
+            }
+        }
+        let image = DynamicImage::ImageRgba8(RgbaImage::from_raw(w, h, rgba).unwrap());
+        let base = ConversionOptions {
+            width: Some(w),
+            contrast: Some(1.0),
+            unsharp: Some(0.0),
+            ..ConversionOptions::default()
+        };
+        let plain = convert_with_options(&image, base).unwrap();
+        let exchanged = convert_with_options(
+            &image,
+            ConversionOptions {
+                exchange: 3,
+                ..base
+            },
+        )
+        .unwrap();
+        assert_eq!(exchanged.exchange, 3);
+        // Every exchange preserves its pair's total, hence the global one.
+        let total = |p: &[u8]| p.iter().map(|&v| v as u64).sum::<u64>();
+        assert_eq!(total(&plain.pixels), total(&exchanged.pixels));
+        assert_ne!(plain.pixels, exchanged.pixels);
+    }
+
+    #[test]
+    fn mode_presets_resolve() {
+        let photo = mode_preset("photo").unwrap();
+        assert!(photo.diffusion);
+        assert_eq!(photo.exchange, MODE_EXCHANGE_ROUNDS);
+        let illustration = mode_preset("illustration").unwrap();
+        assert!(!illustration.diffusion);
+        assert_eq!(illustration.exchange, MODE_EXCHANGE_ROUNDS);
+        assert!(mode_preset("bogus").is_none());
     }
 
     #[test]

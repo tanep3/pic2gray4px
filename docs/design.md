@@ -6,7 +6,7 @@
 src/main.rs       CLI 引数、上書き保護、適用値の表示
 src/lib.rs        デコード、リサイズ、透過合成、前処理の自動選択、PNG 出力
 src/autotune.rs   完成二値画像の階調・輪郭・粒状感・偽飽和セルを採点
-src/optimizer.rs  白点数の独立丸め／セル残差拡散、VM 版の配置最適化
+src/optimizer.rs  白点数の独立丸め／セル残差拡散、VM 版の配置最適化、セル間白点交換
 ```
 
 入力デコードは `image`、出力は `png`。出力 PNG は色種 0・ビット深度 1、各行を MSB 順に詰め、可逆圧縮する。`Cargo.lock` を追跡して依存を固定する。
@@ -17,6 +17,7 @@ src/optimizer.rs  白点数の独立丸め／セル残差拡散、VM 版の配�
 2. RGBA を白地へ合成し輝度へ変える。自動指定がある場合は無補正を含む複数の前処理候補を作り、それぞれを完成した 4px 画像まで変換して元の輝度画像と比較する。選択したコントラスト、アンシャープを順に適用し、奇数寸法の右・下を白で補う。
 3. 各セルの白点数を決める。標準は蛇行 Floyd–Steinberg、`--no-diffusion` は元実験の独立丸め。候補の白点数を固定する。
 4. 9×9 カーネルによる二次形式の局所目的値差で配置を最適化する。残差画像を変更ごとに更新し、最大 10 回の走査を行う。
+4b. 交換を指定した場合は、隣接セル間の白点交換（ペア合計保存）と配置の磨き直しを指定ラウンド数だけ繰り返す。自動選択の候補探索は交換なしで回し、交換は勝った候補にだけ最後に適用する。
 5. 1-bit グレースケール PNG を生成する。既存ファイルは `create_new` で保護し、`--force` でのみ明示的に上書きする。入力と出力が同じ実体なら拒否する。
 
 ## CLI
@@ -24,10 +25,12 @@ src/optimizer.rs  白点数の独立丸め／セル残差拡散、VM 版の配�
 ```text
 pic2gray4px <input> [output.png] [--width PIXELS]
   [--contrast auto|off|0..3] [--unsharp auto|off|0..2]
-  [--no-diffusion] [--passes 0..10] [--force]
+  [--mixer NAME] [--mixer-weights R,G,B] [--tone-curve NAME]
+  [--local-contrast A] [--no-diffusion] [--exchange 0..10]
+  [--mode photo|illustration] [--passes 0..10] [--force]
 ```
 
-標準値は幅変更なし、両補正 auto、残差拡散あり、最大 10 回。保存先、寸法、実際の補正値、残差拡散の有無を標準出力へ表示する。
+標準値は幅変更なし、両補正 auto、残差拡散あり、交換なし、最大 10 回。保存先、寸法、実際の補正値、残差拡散の有無、交換ラウンド数を標準出力へ表示する。色調整フラグの詳細は `docs/adjustment-design.md`、交換とモードは `docs/exchange-design.md`。
 
 ## 検証
 
