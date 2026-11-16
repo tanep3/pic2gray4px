@@ -5,6 +5,12 @@ edition = "2021"
 license = "MIT"
 description = "Turn photos into readable 1-bit images with 2x2 neighborhood gray"
 
+[features]
+default = ["load-image"]
+# File loading with format decoders (CLI only). The conversion core and the
+# 1-bit PNG encoder do not need decoders; WASM builds disable this feature.
+load-image = ["image/png", "image/jpeg", "image/webp", "image/bmp", "image/tiff", "image/pnm"]
+
 [dependencies]
-image = { version = "=0.25.10", default-features = false, features = ["png", "jpeg", "webp", "bmp", "tiff", "pnm"] }
+image = { version = "=0.25.10", default-features = false }
 png = "=0.18.1"

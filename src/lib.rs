@@ -3,10 +3,16 @@
 mod autotune;
 mod optimizer;
 
-use image::{imageops, DynamicImage, ImageDecoder, ImageReader, RgbaImage};
+use image::{imageops, DynamicImage, RgbaImage};
+#[cfg(feature = "load-image")]
+use image::{ImageDecoder, ImageReader};
 use std::error::Error;
-use std::fs::{File, OpenOptions};
-use std::io::{BufReader, BufWriter};
+#[cfg(feature = "load-image")]
+use std::fs::File;
+use std::fs::OpenOptions;
+#[cfg(feature = "load-image")]
+use std::io::BufReader;
+use std::io::{BufWriter, Write};
 use std::path::Path;
 
 pub type Result<T> = std::result::Result<T, Box<dyn Error>>;
@@ -44,6 +50,9 @@ impl Default for ConversionOptions {
 }
 
 /// Load an image, respecting EXIF orientation where the decoder supports it.
+/// Only available with the `load-image` feature (default, used by the CLI);
+/// the format decoders are not part of the conversion core.
+#[cfg(feature = "load-image")]
 pub fn load_image(path: &Path) -> Result<DynamicImage> {
     let decoder = ImageReader::new(BufReader::new(File::open(path)?))
         .with_guessed_format()?
@@ -198,6 +207,30 @@ pub fn convert_with_options(
     })
 }
 
+/// Convert raw RGBA bytes (as delivered by a browser canvas or a WASM caller)
+/// through the same pipeline as [`convert_with_options`]. For identical RGBA
+/// input the result is identical to the `DynamicImage` entry point.
+pub fn convert_rgba(
+    rgba: &[u8],
+    width: u32,
+    height: u32,
+    options: ConversionOptions,
+) -> Result<ConversionResult> {
+    if width == 0 || height == 0 {
+        return Err("input image has no pixels".into());
+    }
+    let expected = (width as usize)
+        .checked_mul(height as usize)
+        .and_then(|n| n.checked_mul(4))
+        .ok_or("image is too large")?;
+    if rgba.len() != expected {
+        return Err("RGBA buffer length must equal width*height*4".into());
+    }
+    let image = RgbaImage::from_raw(width, height, rgba.to_vec())
+        .ok_or("RGBA buffer length must equal width*height*4")?;
+    convert_with_options(&DynamicImage::ImageRgba8(image), options)
+}
+
 fn stats(baseline: &[f32], trial: &[f32], eligible: &[usize]) -> (f32, f32) {
     if eligible.is_empty() {
         return (0.0, 0.0);
@@ -306,8 +339,10 @@ pub fn optimize_gray8(
     Ok((result.pixels, result.changes))
 }
 
-/// Write an actual 1-bit grayscale PNG (PNG color type 0, bit depth 1).
-pub fn write_png(path: &Path, w: u32, h: u32, pixels: &[u8], overwrite: bool) -> Result<()> {
+/// Encode binary pixels (one 0/1 byte per pixel) as an actual 1-bit grayscale
+/// PNG (PNG color type 0, bit depth 1) in memory. The bytes are identical to
+/// what [`write_png`] writes for the same pixels.
+pub fn encode_1bit_png(w: u32, h: u32, pixels: &[u8]) -> Result<Vec<u8>> {
     if pixels.len() != w as usize * h as usize || pixels.iter().any(|&v| v > 1) {
         return Err("invalid binary pixel buffer".into());
     }
@@ -318,7 +353,23 @@ pub fn write_png(path: &Path, w: u32, h: u32, pixels: &[u8], overwrite: bool) ->
             packed[y * row_bytes + x / 8] |= pixels[y * w as usize + x] << (7 - x % 8);
         }
     }
-    let file = BufWriter::new(if overwrite {
+    let mut out = Vec::new();
+    {
+        let mut encoder = png::Encoder::new(&mut out, w, h);
+        encoder.set_color(png::ColorType::Grayscale);
+        encoder.set_depth(png::BitDepth::One);
+        encoder.set_compression(png::Compression::High);
+        let mut writer = encoder.write_header()?;
+        writer.write_image_data(&packed)?;
+        writer.finish()?;
+    }
+    Ok(out)
+}
+
+/// Write an actual 1-bit grayscale PNG (PNG color type 0, bit depth 1).
+pub fn write_png(path: &Path, w: u32, h: u32, pixels: &[u8], overwrite: bool) -> Result<()> {
+    let bytes = encode_1bit_png(w, h, pixels)?;
+    let mut file = BufWriter::new(if overwrite {
         OpenOptions::new()
             .write(true)
             .create(true)
@@ -327,12 +378,8 @@ pub fn write_png(path: &Path, w: u32, h: u32, pixels: &[u8], overwrite: bool) ->
     } else {
         OpenOptions::new().write(true).create_new(true).open(path)?
     });
-    let mut encoder = png::Encoder::new(file, w, h);
-    encoder.set_color(png::ColorType::Grayscale);
-    encoder.set_depth(png::BitDepth::One);
-    encoder.set_compression(png::Compression::High);
-    let mut writer = encoder.write_header()?;
-    writer.write_image_data(&packed)?;
+    file.write_all(&bytes)?;
+    file.flush()?;
     Ok(())
 }
 
@@ -524,5 +571,64 @@ mod tests {
             (new_white as isize - target as isize).abs()
                 < (old_white as isize - target as isize).abs()
         );
+    }
+
+    #[test]
+    fn rgba_entry_point_matches_dynamic_image_path() {
+        // Gradient + dark block + fully and semi-transparent pixels, odd size.
+        let image = RgbaImage::from_fn(25, 17, |x, y| {
+            if x >= 20 && y < 4 {
+                image::Rgba([10, 10, 10, 0])
+            } else if x >= 20 {
+                image::Rgba([200, 180, 160, 100])
+            } else if (6..12).contains(&x) && (4..10).contains(&y) {
+                image::Rgba([30, 30, 30, 255])
+            } else {
+                let gray = (30 + x * 7 + y * 3) as u8;
+                image::Rgba([gray, gray, gray, 255])
+            }
+        });
+        let raw = image.as_raw().clone();
+        let dynamic = DynamicImage::ImageRgba8(image);
+        for options in [
+            ConversionOptions::default(),
+            ConversionOptions {
+                width: Some(16),
+                contrast: Some(1.0),
+                unsharp: Some(0.0),
+                ..ConversionOptions::default()
+            },
+        ] {
+            let via_rgba = convert_rgba(&raw, 25, 17, options).unwrap();
+            let via_image = convert_with_options(&dynamic, options).unwrap();
+            assert_eq!(via_rgba.width, via_image.width);
+            assert_eq!(via_rgba.height, via_image.height);
+            assert_eq!(via_rgba.pixels, via_image.pixels);
+            assert_eq!(via_rgba.contrast, via_image.contrast);
+            assert_eq!(via_rgba.unsharp, via_image.unsharp);
+        }
+    }
+
+    #[test]
+    fn rgba_entry_point_rejects_wrong_length() {
+        assert!(convert_rgba(&[0; 10], 4, 4, ConversionOptions::default()).is_err());
+        assert!(convert_rgba(&[], 0, 4, ConversionOptions::default()).is_err());
+    }
+
+    #[test]
+    fn encoded_png_matches_written_file() {
+        let pixels: Vec<u8> = (0..10 * 6)
+            .map(|i| ((i % 10 + i / 10) % 3 != 0) as u8)
+            .collect();
+        let encoded = encode_1bit_png(10, 6, &pixels).unwrap();
+        assert_eq!(&encoded[..8], &[137, 80, 78, 71, 13, 10, 26, 10]);
+        assert_eq!(encoded[24], 1); // bit depth in IHDR
+        assert_eq!(encoded[25], 0); // grayscale color type in IHDR
+        let path =
+            std::env::temp_dir().join(format!("pic2gray4px-encode-{}.png", std::process::id()));
+        write_png(&path, 10, 6, &pixels, false).unwrap();
+        let written = std::fs::read(&path).unwrap();
+        std::fs::remove_file(path).unwrap();
+        assert_eq!(encoded, written);
     }
 }

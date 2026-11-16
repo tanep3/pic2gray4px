@@ -1,0 +1,16 @@
+[package]
+name = "pic2gray4px-wasm"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Thin wasm-bindgen wrapper over the pic2gray4px library for the Web app"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+pic2gray4px = { path = "..", default-features = false }
+wasm-bindgen = "0.2"
+
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = false

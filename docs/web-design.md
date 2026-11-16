@@ -62,6 +62,14 @@ pic2gray4px/            既存リポジトリ（CLI は無変更で存続）
 - `write_png(path, w, h, pixels, overwrite)` — MSB 詰め＋
   `png::Encoder`（Grayscale / BitDepth::One / Compression::High）。
 
+feature 分離（M1 で実施）：形式デコーダ群と `load_image` は feature
+`load-image`（デフォルト有効）の後ろに置く。変換コアと 1-bit PNG
+エンコードはデコーダを必要としないので、wasm crate は
+`default-features = false` で依存し、WASM の依存ツリーにデコーダを
+入れない。CLI はデフォルト feature のまま無変更。なお WASM の実サイズは
+分離前後でほぼ変わらなかった（未使用のデコーダはリンク時に除去されて
+いたため）——分離の目的はサイズではなく、依存の表面を正しく保つこと。
+
 追加する関数：
 
 | 関数 | 引数 | 戻り値 | 備考 |
@@ -83,7 +91,8 @@ CLI の挙動は変えない（既存テスト全通過＋ §6 の一致テス�
 
 ### 3.3 wasm crate（`wasm/`）
 
-- crate 名 `pic2gray4px-wasm`、cdylib。依存は `pic2gray4px = { path = ".." }` と
+- crate 名 `pic2gray4px-wasm`、cdylib。依存は
+  `pic2gray4px = { path = "..", default-features = false }` と
   `wasm-bindgen` のみ。ロジックは持たず、型の詰め替えだけを行う。
 - `[package.metadata.wasm-pack.profile.release] wasm-opt = false`
   （MiniMapPrint の前例。環境依存のダウンロードを避け再現性を取る）。
