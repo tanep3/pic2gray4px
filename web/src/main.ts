@@ -113,9 +113,9 @@ function collectOptions(): ConvertOptions {
     diffusion: el<HTMLInputElement>('diffusion-check').checked,
     mixerPreset: pressedValue('mixer-chips', 'mixer'),
     toneCurve: pressedValue('curve-chips', 'curve'),
-    localContrast: el<HTMLInputElement>('local-check').checked
-      ? Number.parseFloat(el<HTMLInputElement>('local-range').value)
-      : 0,
+    // The strength slider is the only control: 0 means off, so there
+    // is no separate ON/OFF switch to disagree with it.
+    localContrast: Number.parseFloat(el<HTMLInputElement>('local-range').value),
   };
 }
 
@@ -258,18 +258,13 @@ function initAdjust(): void {
         });
       });
   }
-  el<HTMLInputElement>('local-check').addEventListener('change', () =>
-    void requestConvert(),
-  );
   const localRange = el<HTMLInputElement>('local-range');
   const localValue = el<HTMLElement>('local-value');
   localValue.textContent = formatValue(Number.parseFloat(localRange.value));
   localRange.addEventListener('input', () => {
     localValue.textContent = formatValue(Number.parseFloat(localRange.value));
   });
-  localRange.addEventListener('change', () => {
-    if (el<HTMLInputElement>('local-check').checked) void requestConvert();
-  });
+  localRange.addEventListener('change', () => void requestConvert());
 }
 
 function initAdvanced(): void {
