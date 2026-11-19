@@ -376,18 +376,6 @@ button:disabled {
   gap: 0.75rem;
 }
 
-.name-label {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  font-weight: 600;
-}
-
-.name-label input {
-  flex: 1;
-  min-width: 0;
-}
-
 .advanced {
   background: var(--surface);
   border: 2px solid var(--border);
@@ -419,8 +407,7 @@ button:disabled {
 }
 
 select,
-input[type="number"],
-input[type="text"] {
+input[type="number"] {
   font: inherit;
   padding: 0.3rem 0.5rem;
   border: 2px solid var(--border);

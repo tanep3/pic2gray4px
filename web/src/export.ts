@@ -10,9 +10,12 @@
 // default name therefore carries a to-the-second timestamp, making
 // collisions impossible by construction; names handed out in this
 // session are also remembered and get a -2, -3, ... suffix if the
-// same second repeats. A name the user typed is used verbatim:
-// picking a name is their intent, overwrite included. (Same rule as
-// Voice2QR / MiniMapPrint, 2026-11-19.)
+// same second repeats. There is deliberately no name field: the
+// timestamp alone guarantees uniqueness, so naming UI would be
+// surface a casual user should not have to think about (decided
+// 2026-11-19, same as Voice2QR / MiniMapPrint; if custom naming is
+// ever needed, it should come back as a save-time prompt, not a
+// standing field).
 const handedOutNames = new Set<string>();
 
 export function defaultSaveName(base: string): string {
@@ -24,31 +27,11 @@ export function defaultSaveName(base: string): string {
   );
 }
 
-export function sanitizeSaveName(raw: string): string {
-  const name = raw
-    .trim()
-    .replace(/[\\/:*?"<>|]/g, '_')
-    .replace(/\s+/g, ' ')
-    .replace(/^\.+/, '')
-    .slice(0, 100);
-  if (!name) return '';
-  return /\.png$/i.test(name) ? name : `${name}.png`;
-}
-
 /**
- * The name for one save/share action. While the field is untouched,
- * a fresh unique default is generated (and shown in the field). Once
- * the user edits the field, their text wins as-is.
+ * The name for one save/share action: a fresh timestamped default,
+ * deduplicated within the session.
  */
-export function resolveSaveName(
-  input: HTMLInputElement,
-  edited: boolean,
-  base: string,
-): string {
-  if (edited) {
-    const typed = sanitizeSaveName(input.value);
-    if (typed) return typed;
-  }
+export function nextSaveName(base: string): string {
   let name = defaultSaveName(base);
   if (handedOutNames.has(name)) {
     const stem = name.slice(0, -'.png'.length);
@@ -57,7 +40,6 @@ export function resolveSaveName(
     name = `${stem}-${n}.png`;
   }
   handedOutNames.add(name);
-  input.value = name;
   return name;
 }
 
