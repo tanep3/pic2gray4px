@@ -8,7 +8,13 @@ import {
   type ConvertRequest,
   type WorkerPort,
 } from './client';
-import { canSharePng, savePng, sharePng } from './export';
+import {
+  canSharePng,
+  savePng,
+  sharePng,
+  defaultSaveName,
+  resolveSaveName,
+} from './export';
 import { applyI18n, getLang, setLang, t, type I18nKey, type Lang } from './i18n';
 import {
   consumeSharedImage,
@@ -35,6 +41,8 @@ const sourceMeta = el<HTMLElement>('source-meta');
 const resultImg = el<HTMLImageElement>('result-img');
 const resultEmpty = el<HTMLElement>('result-empty');
 const resultMeta = el<HTMLElement>('result-meta');
+const nameInput = el<HTMLInputElement>('name-input');
+let nameEdited = false;
 const saveButton = el<HTMLButtonElement>('save-button');
 const shareButton = el<HTMLButtonElement>('share-button');
 const printButton = el<HTMLButtonElement>('print-button');
@@ -163,6 +171,8 @@ async function requestConvert(): Promise<void> {
     capped: outcome.capped,
   };
   resultPng = outcome.png;
+  nameInput.value = defaultSaveName('pic2gray4px');
+  nameEdited = false;
   if (resultUrl) URL.revokeObjectURL(resultUrl);
   resultUrl = URL.createObjectURL(new Blob([outcome.png], { type: 'image/png' }));
   resultImg.src = resultUrl;
@@ -325,14 +335,19 @@ async function init(): Promise<void> {
   initSizeChips();
   initAdjust();
   initAdvanced();
+  nameInput.addEventListener('input', () => {
+    nameEdited = true;
+  });
   saveButton.addEventListener('click', () => {
-    if (resultPng) savePng(resultPng);
+    if (resultPng)
+      savePng(resultPng, resolveSaveName(nameInput, nameEdited, 'pic2gray4px'));
   });
   shareButton.hidden = !canSharePng();
   shareButton.addEventListener('click', async () => {
     if (!resultPng) return;
-    const outcome = await sharePng(resultPng);
-    if (outcome === 'unsupported') savePng(resultPng);
+    const name = resolveSaveName(nameInput, nameEdited, 'pic2gray4px');
+    const outcome = await sharePng(resultPng, name);
+    if (outcome === 'unsupported') savePng(resultPng, name);
   });
   printButton.addEventListener('click', () => {
     if (!resultUrl || !lastResult) return;
