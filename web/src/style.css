@@ -95,6 +95,13 @@ body {
   font-size: 0.85rem;
 }
 
+.credit {
+  margin: 18px 0 10px;
+  text-align: center;
+  color: var(--ink-soft);
+  font-size: 0.8rem;
+}
+
 .update-notice {
   display: flex;
   justify-content: center;
