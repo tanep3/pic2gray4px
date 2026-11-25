@@ -23,6 +23,11 @@ import {
   wireFilePicker,
   wirePaste,
 } from './input';
+import {
+  CropController,
+  defaultCropRect,
+  isFullRect,
+} from './crop';
 import { checkForUpdate, registerServiceWorker } from './pwa';
 
 function el<T extends HTMLElement>(id: string): T {
@@ -48,10 +53,23 @@ const zoomImg = el<HTMLImageElement>('zoom-img');
 const printImg = el<HTMLImageElement>('print-img');
 const customWidthRow = el<HTMLElement>('custom-width-row');
 const customWidthInput = el<HTMLInputElement>('custom-width');
+const cropOverlay = el<HTMLElement>('crop-overlay');
+const cropRectEl = el<HTMLElement>('crop-rect');
+const cropStartButton = el<HTMLButtonElement>('crop-start');
+const cropApplyButton = el<HTMLButtonElement>('crop-apply');
+const cropCancelButton = el<HTMLButtonElement>('crop-cancel');
+const cropResetButton = el<HTMLButtonElement>('crop-reset');
 
 let client: ConversionClient | null = null;
 let workerDecode = false;
 let currentBlob: Blob | null = null;
+// The untouched intake image and the cropped derivative of it.
+// Conversion always runs on currentBlob (the crop when one is
+// applied, the original otherwise); the original is kept so the
+// crop can be redone or cleared.
+let originalBlob: Blob | null = null;
+let croppedBlob: Blob | null = null;
+let crop: CropController | null = null;
 let sourceUrl: string | null = null;
 let resultUrl: string | null = null;
 let resultPng: ArrayBuffer | null = null;
@@ -115,7 +133,8 @@ function collectOptions(): ConvertOptions {
     contrast: adjustmentValue('contrast-mode', 'contrast-range', 1.0),
     unsharp: adjustmentValue('unsharp-mode', 'unsharp-range', 0.0),
     passes: Number.parseInt(el<HTMLInputElement>('passes-range').value, 10),
-    // The mode bundles diffusion + exchange; the core resolves it.
+    // The mode bundles backend + diffusion + exchange; the core
+    // resolves it.
     mode: pressedValue('mode-chips', 'mode') ?? 'photo',
     mixerPreset: pressedValue('mixer-chips', 'mixer'),
     toneCurve: pressedValue('curve-chips', 'curve'),
@@ -216,24 +235,117 @@ function renderResultMeta(): void {
     (lastResult.localContrastUsed > 0
       ? ` / ${t('localContrast')} ${formatValue(lastResult.localContrastUsed)}`
       : '') +
-    ` / ${t('modeTitle')}: ${t(lastResult.mode === 'illustration' ? 'modeIllustration' : 'modePhoto')}` +
+    ` / ${t('modeTitle')}: ${t(lastResult.mode === 'dither' ? 'modeDither' : lastResult.mode === 'illustration' ? 'modeIllustration' : 'modePhoto')}` +
     (lastResult.capped ? ` / ${t('scaledNote')}` : '');
 }
 
-function onBlob(blob: Blob): void {
-  currentBlob = blob;
+function showSource(blob: Blob, cropped: boolean): void {
   if (sourceUrl) URL.revokeObjectURL(sourceUrl);
   sourceUrl = URL.createObjectURL(blob);
   sourceImg.src = sourceUrl;
   sourceImg.hidden = false;
   sourceEmpty.hidden = true;
   sourceImg.onload = () => {
-    sourceMeta.textContent = t('sourceMeta', {
-      w: sourceImg.naturalWidth,
-      h: sourceImg.naturalHeight,
-    });
+    sourceMeta.textContent =
+      t('sourceMeta', {
+        w: sourceImg.naturalWidth,
+        h: sourceImg.naturalHeight,
+      }) + (cropped ? ` / ${t('croppedNote')}` : '');
   };
+}
+
+function onBlob(blob: Blob): void {
+  originalBlob = blob;
+  croppedBlob = null;
+  currentBlob = blob;
+  crop?.setRect(defaultCropRect());
+  exitCropMode();
+  showSource(blob, false);
   void requestConvert();
+}
+
+function enterCropMode(): void {
+  if (!originalBlob || !crop) return;
+  // The rect maps onto the original image, so preview the original
+  // (not the cropped derivative) while cropping.
+  showSource(originalBlob, false);
+  crop.show();
+  cropStartButton.hidden = true;
+  cropResetButton.hidden = true;
+  cropApplyButton.hidden = false;
+  cropCancelButton.hidden = false;
+}
+
+function exitCropMode(): void {
+  crop?.hide();
+  cropApplyButton.hidden = true;
+  cropCancelButton.hidden = true;
+  if (originalBlob) {
+    cropStartButton.hidden = false;
+    cropResetButton.hidden = !croppedBlob;
+  }
+}
+
+async function applyCrop(): Promise<void> {
+  if (!originalBlob || !crop) return;
+  const rect = crop.getRect();
+  if (isFullRect(rect)) {
+    croppedBlob = null;
+    currentBlob = originalBlob;
+    exitCropMode();
+    showSource(originalBlob, false);
+    void requestConvert();
+    return;
+  }
+  try {
+    const bitmap = await createImageBitmap(originalBlob);
+    const sx = Math.round(rect.x * bitmap.width);
+    const sy = Math.round(rect.y * bitmap.height);
+    const sw = Math.max(1, Math.round(rect.w * bitmap.width));
+    const sh = Math.max(1, Math.round(rect.h * bitmap.height));
+    const canvas = document.createElement('canvas');
+    canvas.width = sw;
+    canvas.height = sh;
+    const context = canvas.getContext('2d');
+    if (!context) throw new Error('no 2d context');
+    context.drawImage(bitmap, sx, sy, sw, sh, 0, 0, sw, sh);
+    bitmap.close();
+    const blob = await new Promise<Blob | null>((resolve) =>
+      canvas.toBlob(resolve, 'image/png'),
+    );
+    if (!blob) throw new Error('crop failed');
+    croppedBlob = blob;
+    currentBlob = blob;
+    exitCropMode();
+    showSource(blob, true);
+    void requestConvert();
+  } catch {
+    setStatus(t('errorPrefix') + t('decodeFailed'), true);
+  }
+}
+
+function cancelCrop(): void {
+  if (!originalBlob) return;
+  exitCropMode();
+  showSource(croppedBlob ?? originalBlob, croppedBlob !== null);
+}
+
+function resetCrop(): void {
+  if (!originalBlob) return;
+  croppedBlob = null;
+  currentBlob = originalBlob;
+  crop?.setRect(defaultCropRect());
+  exitCropMode();
+  showSource(originalBlob, false);
+  void requestConvert();
+}
+
+function initCrop(): void {
+  crop = new CropController(cropOverlay, cropRectEl);
+  cropStartButton.addEventListener('click', enterCropMode);
+  cropApplyButton.addEventListener('click', () => void applyCrop());
+  cropCancelButton.addEventListener('click', cancelCrop);
+  cropResetButton.addEventListener('click', resetCrop);
 }
 
 function initSizeChips(): void {
@@ -330,6 +442,7 @@ async function init(): Promise<void> {
   initSizeChips();
   initAdjust();
   initAdvanced();
+  initCrop();
   saveButton.addEventListener('click', () => {
     if (resultPng) savePng(resultPng, nextSaveName('pic2gray4px'));
   });

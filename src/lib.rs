@@ -2,18 +2,44 @@
 
 mod adjust;
 mod autotune;
+mod dither;
 mod optimizer;
 
 pub use adjust::{mixer_preset, ToneCurve, MIXER_PRESETS, STANDARD_MIXER};
 
-/// A named conversion mode: a bundle of the diffusion and exchange
-/// settings that suit a class of input. Modes are resolved by the core
-/// so the CLI, the Web app, and library callers share one definition.
+/// The binarization backend that turns the preprocessed gray plane
+/// into 0/1 pixels. Both backends consume the same plane and are
+/// scored by the same candidate search; they differ in what they
+/// optimize. `Cell` arranges dots inside 2×2 cells to protect
+/// structure; `FloydSteinberg` diffuses each pixel's quantization
+/// error to its neighbors, preserving local mean tone at full
+/// resolution (smoother gradations, noisier flat areas and edges).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Backend {
+    Cell,
+    FloydSteinberg,
+}
+
+impl Backend {
+    pub fn name(self) -> &'static str {
+        match self {
+            Backend::Cell => "cell",
+            Backend::FloydSteinberg => "dither",
+        }
+    }
+}
+
+/// A named conversion mode: a bundle of the backend and the diffusion
+/// and exchange settings that suit a class of input. Modes are
+/// resolved by the core so the CLI, the Web app, and library callers
+/// share one definition.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ModePreset {
-    /// Cell white-count diffusion on/off.
+    /// Binarization backend.
+    pub backend: Backend,
+    /// Cell white-count diffusion on/off (cell backend only).
     pub diffusion: bool,
-    /// Inter-cell white-dot exchange rounds.
+    /// Inter-cell white-dot exchange rounds (cell backend only).
     pub exchange: usize,
 }
 
@@ -22,18 +48,29 @@ pub struct ModePreset {
 /// small consistent tail; the judged comparison sheets used 3.
 pub const MODE_EXCHANGE_ROUNDS: usize = 3;
 
-/// Resolve a mode name ("photo" / "illustration") to its settings.
-/// - photo: diffusion on + exchange — smooth tonal gradation wins.
-/// - illustration: diffusion off + exchange — flat areas stay clean.
+/// Resolve a mode name ("photo" / "illustration" / "dither") to its
+/// settings.
+/// - photo: cell backend, diffusion on + exchange — structure wins.
+/// - illustration: cell backend, diffusion off + exchange — flat
+///   areas stay clean.
+/// - dither: Floyd–Steinberg error diffusion — smooth tonal
+///   gradation wins; diffusion/exchange do not apply.
 pub fn mode_preset(name: &str) -> Option<ModePreset> {
     match name {
         "photo" => Some(ModePreset {
+            backend: Backend::Cell,
             diffusion: true,
             exchange: MODE_EXCHANGE_ROUNDS,
         }),
         "illustration" => Some(ModePreset {
+            backend: Backend::Cell,
             diffusion: false,
             exchange: MODE_EXCHANGE_ROUNDS,
+        }),
+        "dither" => Some(ModePreset {
+            backend: Backend::FloydSteinberg,
+            diffusion: false,
+            exchange: 0,
         }),
         _ => None,
     }
@@ -56,6 +93,11 @@ pub type Result<T> = std::result::Result<T, Box<dyn Error>>;
 #[derive(Clone, Copy, Debug)]
 pub struct ConversionOptions {
     pub width: Option<u32>,
+    /// Binarization backend. The preprocessing stages (mixer, tone
+    /// curve, local contrast, contrast/unsharp search) are shared by
+    /// both backends; `passes`, `diffusion` and `exchange` only apply
+    /// to the cell backend.
+    pub backend: Backend,
     pub passes: usize,
     /// None searches completed 4px outputs; Some(1.0) disables contrast.
     pub contrast: Option<f32>,
@@ -82,6 +124,8 @@ pub struct ConversionResult {
     pub width: u32,
     pub height: u32,
     pub pixels: Vec<u8>,
+    /// Binarization backend actually applied.
+    pub backend: Backend,
     pub contrast: f32,
     pub unsharp: f32,
     /// Mixer weights actually applied.
@@ -98,6 +142,7 @@ impl Default for ConversionOptions {
     fn default() -> Self {
         Self {
             width: None,
+            backend: Backend::Cell,
             passes: 10,
             contrast: None,
             unsharp: None,
@@ -148,6 +193,7 @@ pub fn convert_with_options(
 ) -> Result<ConversionResult> {
     let ConversionOptions {
         width,
+        backend,
         passes,
         contrast,
         unsharp,
@@ -260,8 +306,11 @@ pub fn convert_with_options(
             // The candidate search always runs without exchange: scores
             // stay comparable across candidates, and the exchange stage
             // (which improves every candidate in the same direction) is
-            // applied once, to the winner only, below.
-            let result = optimizer::optimize(
+            // applied once, to the winner only, below. The scoring is
+            // backend-agnostic: whichever backend is selected produces
+            // the completed output that autotune::score judges.
+            let result = binarize(
+                backend,
                 &trial,
                 out_w as usize,
                 out_h as usize,
@@ -274,7 +323,7 @@ pub fn convert_with_options(
             let score = if contrast.is_none() || unsharp.is_none() {
                 autotune::score(
                     &target,
-                    &result.pixels,
+                    &result,
                     stride,
                     out_h as usize,
                     valid_w,
@@ -287,14 +336,16 @@ pub fn convert_with_options(
                 .as_ref()
                 .is_none_or(|(old, _, _, _)| score < *old - 1e-12)
             {
-                best = Some((score, factor, *amount, result.pixels));
+                best = Some((score, factor, *amount, result));
             }
         }
     }
     let (_, contrast, unsharp, pixels) = best.expect("unadjusted candidate must be available");
-    let pixels = if exchange > 0 {
+    let pixels = if exchange > 0 && backend == Backend::Cell {
         // Rebuild the winning candidate's plane (preprocessing is
         // deterministic) and re-run its optimization with exchange.
+        // Exchange is a cell-backend stage; the dither backend's
+        // search output is already final.
         let mut contrasted = target.clone();
         preprocess(&mut contrasted, stride, valid_w, valid_h, contrast, 0.0);
         let mut trial = contrasted;
@@ -317,6 +368,7 @@ pub fn convert_with_options(
         width: out_w,
         height: out_h,
         pixels,
+        backend,
         contrast,
         unsharp,
         mixer: mixer_weights,
@@ -348,6 +400,31 @@ pub fn convert_rgba(
     let image = RgbaImage::from_raw(width, height, rgba.to_vec())
         .ok_or("RGBA buffer length must equal width*height*4")?;
     convert_with_options(&DynamicImage::ImageRgba8(image), options)
+}
+
+/// Run the selected binarization backend on a preprocessed plane.
+/// `exchange` is only meaningful for the cell backend.
+#[allow(clippy::too_many_arguments)]
+fn binarize(
+    backend: Backend,
+    trial: &[f32],
+    out_w: usize,
+    out_h: usize,
+    valid_w: usize,
+    valid_h: usize,
+    passes: usize,
+    diffusion: bool,
+    exchange: usize,
+) -> Vec<u8> {
+    match backend {
+        Backend::Cell => optimizer::optimize(
+            trial, out_w, out_h, valid_w, valid_h, passes, diffusion, exchange,
+        )
+        .pixels,
+        Backend::FloydSteinberg => {
+            dither::floyd_steinberg(trial, out_w, out_h, valid_w, valid_h)
+        }
+    }
 }
 
 fn stats(baseline: &[f32], trial: &[f32], eligible: &[usize]) -> (f32, f32) {

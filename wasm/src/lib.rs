@@ -17,6 +17,7 @@ pub struct ConvertResult {
     local_contrast_used: f32,
     diffusion_used: bool,
     exchange_used: u32,
+    backend_used: String,
 }
 
 #[wasm_bindgen]
@@ -73,6 +74,13 @@ impl ConvertResult {
     pub fn exchange_used(&self) -> u32 {
         self.exchange_used
     }
+
+    /// Binarization backend actually applied, by its core name
+    /// ("cell" / "dither").
+    #[wasm_bindgen(getter)]
+    pub fn backend_used(&self) -> String {
+        self.backend_used.clone()
+    }
 }
 
 fn run(
@@ -95,6 +103,7 @@ fn run(
         local_contrast_used: result.local_contrast,
         diffusion_used,
         exchange_used: result.exchange as u32,
+        backend_used: result.backend.name().to_string(),
     })
 }
 
@@ -134,10 +143,11 @@ pub fn convert_rgba(
 /// resolved by the library (the single source of truth for the preset
 /// table); `None` for a name or amount selects the library default for
 /// that stage. `mixer_preset_name` and `mixer_weights` are mutually
-/// exclusive. `mode_name` ("photo" / "illustration") bundles the
-/// diffusion and exchange settings and overrides the `diffusion`
-/// argument; it cannot be combined with `exchange_rounds`, which sets
-/// the exchange rounds directly when no mode is given.
+/// exclusive. `mode_name` ("photo" / "illustration" / "dither")
+/// bundles the backend, diffusion and exchange settings and overrides
+/// the `diffusion` argument; it cannot be combined with
+/// `exchange_rounds`, which sets the exchange rounds directly when no
+/// mode is given.
 /// See `docs/adjustment-design.md` and `docs/exchange-design.md`.
 #[wasm_bindgen]
 #[allow(clippy::too_many_arguments)]
@@ -167,13 +177,17 @@ pub fn convert_rgba_adjusted(
             "mode_name and exchange_rounds cannot be combined",
         ));
     }
-    let (diffusion, exchange) = match mode_name {
+    let (backend, diffusion, exchange) = match mode_name {
         Some(name) => {
             let preset = pic2gray4px::mode_preset(&name)
                 .ok_or_else(|| JsError::new(&format!("unknown mode: {name}")))?;
-            (preset.diffusion, preset.exchange)
+            (preset.backend, preset.diffusion, preset.exchange)
         }
-        None => (diffusion, exchange_rounds.unwrap_or(0) as usize),
+        None => (
+            pic2gray4px::Backend::Cell,
+            diffusion,
+            exchange_rounds.unwrap_or(0) as usize,
+        ),
     };
     let mixer = match (mixer_preset_name, mixer_weights) {
         (Some(name), _) => Some(
@@ -199,6 +213,7 @@ pub fn convert_rgba_adjusted(
         height,
         ConversionOptions {
             width: target_width,
+            backend,
             passes: passes as usize,
             contrast,
             unsharp,

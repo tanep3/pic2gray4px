@@ -353,6 +353,77 @@ button:disabled {
   color: var(--ink-soft);
 }
 
+/* Crop overlay on the source preview. The wrap hugs the displayed
+   image box so the absolutely positioned overlay always matches it;
+   the rect itself is positioned in percent, so no resize tracking
+   is needed. */
+.crop-wrap {
+  position: relative;
+  display: inline-block;
+  line-height: 0;
+  max-width: 100%;
+}
+
+.crop-overlay {
+  position: absolute;
+  inset: 0;
+  touch-action: none;
+}
+
+.crop-rect {
+  position: absolute;
+  box-sizing: border-box;
+  border: 2px solid var(--accent-deep);
+  box-shadow: 0 0 0 9999px rgba(74, 34, 52, 0.45);
+  cursor: move;
+}
+
+.crop-handle {
+  position: absolute;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #fff;
+  border: 2px solid var(--accent-deep);
+  transform: translate(-50%, -50%);
+  z-index: 1;
+}
+
+.crop-handle[data-handle="nw"] {
+  left: 0;
+  top: 0;
+  cursor: nwse-resize;
+}
+
+.crop-handle[data-handle="ne"] {
+  right: 0;
+  top: 0;
+  transform: translate(50%, -50%);
+  cursor: nesw-resize;
+}
+
+.crop-handle[data-handle="sw"] {
+  left: 0;
+  bottom: 0;
+  transform: translate(-50%, 50%);
+  cursor: nesw-resize;
+}
+
+.crop-handle[data-handle="se"] {
+  right: 0;
+  bottom: 0;
+  transform: translate(50%, 50%);
+  cursor: nwse-resize;
+}
+
+.crop-bar {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+  min-height: 1px;
+}
+
 .meta {
   color: var(--ink-soft);
   font-size: 0.85rem;

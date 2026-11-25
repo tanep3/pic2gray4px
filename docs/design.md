@@ -27,7 +27,7 @@ pic2gray4px <input> [output.png] [--width PIXELS]
   [--contrast auto|off|0..3] [--unsharp auto|off|0..2]
   [--mixer NAME] [--mixer-weights R,G,B] [--tone-curve NAME]
   [--local-contrast A] [--no-diffusion] [--exchange 0..10]
-  [--mode photo|illustration] [--passes 0..10] [--force]
+  [--mode dither|photo|illustration] [--passes 0..10] [--force]
 ```
 
 標準値は幅変更なし、両補正 auto、残差拡散あり、交換なし、最大 10 回。保存先、寸法、実際の補正値、残差拡散の有無、交換ラウンド数を標準出力へ表示する。色調整フラグの詳細は `docs/adjustment-design.md`、交換とモードは `docs/exchange-design.md`。

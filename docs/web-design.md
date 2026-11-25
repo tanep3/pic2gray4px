@@ -53,11 +53,12 @@ pic2gray4px/            既存リポジトリ（CLI は無変更で存続）
 
 既存の表面（確認済み）：
 
-- `ConversionOptions { width: Option<u32>, passes: usize = 10,
+- `ConversionOptions { width: Option<u32>, backend: Backend = Cell,
+  passes: usize = 10,
   contrast: Option<f32>, unsharp: Option<f32>, diffusion: bool = true,
   exchange: usize = 0, mixer / tone_curve / local_contrast（色調整） }`
-  - モード解決 `mode_preset("photo" | "illustration") -> ModePreset
-    { diffusion, exchange }` もコアが持つ（名前表が正本）。
+  - モード解決 `mode_preset("dither" | "photo" | "illustration") ->
+    ModePreset { backend, diffusion, exchange }` もコアが持つ（名前表が正本）。
   - `contrast: None` = 自動、`Some(1.0)` = オフ。`unsharp: None` = 自動、`Some(0.0)` = オフ。
 - `convert_with_options(&DynamicImage, ConversionOptions) -> Result<ConversionResult>`
   - 範囲検証（contrast 0〜3、unsharp 0〜2、passes 0〜10、width ≥ 1）→

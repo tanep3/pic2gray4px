@@ -1,6 +1,6 @@
 use pic2gray4px::{
-    convert_with_options, load_image, mixer_preset, mode_preset, write_png, ConversionOptions,
-    Result, ToneCurve,
+    convert_with_options, load_image, mixer_preset, mode_preset, write_png, Backend,
+    ConversionOptions, Result, ToneCurve,
 };
 use std::env;
 use std::path::{Path, PathBuf};
@@ -18,7 +18,7 @@ fn usage() -> &'static str {
        --local-contrast A  Local contrast amount 0..1 (default: 0)\n\
        --no-diffusion  Use original independent cell white counts\n\
        --exchange N    Inter-cell white-dot exchange rounds 0..10 (default: 0)\n\
-       --mode NAME     Mode preset: photo (diffusion + exchange) | illustration (exchange only)\n\
+       --mode NAME     Mode preset: dither (Floyd-Steinberg) | photo (diffusion + exchange) | illustration (exchange only)\n\
        --passes N      Maximum optimization sweeps 0..10 (default: 10)\n\
        --force         Overwrite an existing output file\n\
        -h, --help      Show this help"
@@ -133,8 +133,9 @@ fn run() -> Result<()> {
             let value = args.next().ok_or("--mode needs a name")?;
             let name = value.to_string_lossy();
             let preset = mode_preset(&name).ok_or_else(|| {
-                format!("unknown mode: {name} (photo, illustration)")
+                format!("unknown mode: {name} (dither, photo, illustration)")
             })?;
+            options.backend = preset.backend;
             options.diffusion = preset.diffusion;
             options.exchange = preset.exchange;
         } else if arg == "--force" {
@@ -173,10 +174,11 @@ fn run() -> Result<()> {
         force,
     )?;
     println!(
-        "{} ({}x{}, 1-bit grayscale PNG; mixer=({:.2}, {:.2}, {:.2}); tone-curve={}; local-contrast={:.2}; contrast={:.2}{}; unsharp={:.2}{}; cell diffusion={}; exchange={})",
+        "{} ({}x{}, 1-bit grayscale PNG; backend={}; mixer=({:.2}, {:.2}, {:.2}); tone-curve={}; local-contrast={:.2}; contrast={:.2}{}; unsharp={:.2}{}; cell diffusion={}; exchange={})",
         output.display(),
         converted.width,
         converted.height,
+        converted.backend.name(),
         converted.mixer.0,
         converted.mixer.1,
         converted.mixer.2,
@@ -194,7 +196,11 @@ fn run() -> Result<()> {
         } else {
             ""
         },
-        if options.diffusion { "on" } else { "off" },
+        if converted.backend == Backend::Cell && options.diffusion {
+            "on"
+        } else {
+            "off"
+        },
         converted.exchange
     );
     Ok(())
