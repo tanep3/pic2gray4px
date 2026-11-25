@@ -1,7 +1,7 @@
 // Persistence of the conversion panel settings: the last-used
 // settings are kept in localStorage and restored on the next visit.
 // With nothing stored, the HTML defaults apply (mode: dither, mixer:
-// standard, tone curve: contrast, size: 576).
+// standard, tone curve: normal, size: 576).
 
 const STORAGE_KEY = 'pic2gray4px-settings';
 
