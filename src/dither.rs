@@ -4,16 +4,25 @@
 //! the cell optimizer spends its budget on structure (dot arrangement
 //! inside 2×2 cells), error diffusion preserves the local mean tone at
 //! full pixel resolution, which renders smooth gradations (skin, sky)
-//! more faithfully. It consumes the same preprocessed f32 plane as the
-//! optimizer — 0.0 is black, 1.0 is white — and returns the same 0/1
-//! pixel encoding, so the mixer, tone curve, local contrast, and the
-//! contrast/unsharp candidate search (scored on the completed output)
-//! all apply unchanged.
+//! more faithfully.
+//!
+//! The arithmetic replicates Pillow's `Image.convert("1")` (the
+//! `tobilevel` function in libImaging/Convert.c) exactly, so the same
+//! gray plane produces the same dot pattern as the dither the Lily
+//! Print app prints with: the plane is quantized to bytes, the
+//! decision value is the byte plus accumulated error in sixteenths
+//! (integer division truncating toward zero), clipped to 0..=255,
+//! white iff the clipped value is > 128, and the error is propagated
+//! with the (1, 5, 3, 7)/16 shares folded into the `l` / `l0` / `l1`
+//! carries and the per-row `errors` buffer. For even-sized planes
+//! the output is pixel-identical to Pillow's; the padded row/column
+//! of an odd-sized plane has no Pillow counterpart and stays white.
 
-/// Binarize a normalized gray plane with serpentine Floyd–Steinberg
-/// diffusion. Only the valid region (`valid_w` × `valid_h`) is
-/// processed; padding pixels are emitted white, matching the cell
-/// optimizer's treatment of the padded plane.
+/// Binarize a normalized gray plane (0.0 is black, 1.0 is white) with
+/// Pillow-identical Floyd–Steinberg diffusion. Only the valid region
+/// (`valid_w` × `valid_h`) is processed; padding pixels are emitted
+/// white, matching the cell optimizer's treatment of the padded
+/// plane.
 pub(crate) fn floyd_steinberg(
     target: &[f32],
     w: usize,
@@ -21,41 +30,37 @@ pub(crate) fn floyd_steinberg(
     valid_w: usize,
     valid_h: usize,
 ) -> Vec<u8> {
-    let mut buf = target.to_vec();
+    let mut errors = vec![0_i32; valid_w + 1];
     let mut out = vec![1u8; w * h];
     for y in 0..valid_h {
-        let ltr = y % 2 == 0;
-        let xs: Vec<usize> = if ltr {
-            (0..valid_w).collect()
-        } else {
-            (0..valid_w).rev().collect()
-        };
-        let dir: isize = if ltr { 1 } else { -1 };
-        for x in xs {
+        let (mut l, mut l0, mut l1) = (0_i32, 0_i32, 0_i32);
+        for x in 0..valid_w {
             let i = y * w + x;
-            let old = buf[i];
-            let new = if old >= 0.5 { 1.0 } else { 0.0 };
-            out[i] = new as u8;
-            let err = old - new;
-            if err == 0.0 {
-                continue;
-            }
-            // Forward neighbor on this row: 7/16.
-            push(&mut buf, w, valid_w, valid_h, x as isize + dir, y, err * (7.0 / 16.0));
-            // Next row: behind 3/16, center 5/16, forward 1/16.
-            push(&mut buf, w, valid_w, valid_h, x as isize - dir, y + 1, err * (3.0 / 16.0));
-            push(&mut buf, w, valid_w, valid_h, x as isize, y + 1, err * (5.0 / 16.0));
-            push(&mut buf, w, valid_w, valid_h, x as isize + dir, y + 1, err * (1.0 / 16.0));
+            let input = (target[i] * 255.0).round().clamp(0.0, 255.0) as i32;
+            // Decision value: input plus the accumulated error (kept
+            // in sixteenths), clipped to the byte range. Rust's i32
+            // division truncates toward zero, like C's.
+            l = (input + (l + errors[x + 1]) / 16).clamp(0, 255);
+            let white = l > 128;
+            out[i] = white as u8;
+            l -= if white { 255 } else { 0 };
+            // Propagate the error: the shares destined for the next
+            // row (below-right 1, below 5, below-left 3, seen from the
+            // contributing pixels) are folded into errors[x] / l0,
+            // and the forward share (7) stays in l. All values are
+            // sixteenths of the error.
+            let l2 = l;
+            let d2 = l + l;
+            l += d2;
+            errors[x] = l + l0;
+            l += d2;
+            l0 = l + l1;
+            l1 = l2;
+            l += d2;
         }
+        errors[valid_w] = l0;
     }
     out
-}
-
-fn push(buf: &mut [f32], w: usize, valid_w: usize, valid_h: usize, x: isize, y: usize, delta: f32) {
-    if x < 0 || x as usize >= valid_w || y >= valid_h {
-        return;
-    }
-    buf[y * w + x as usize] += delta;
 }
 
 #[cfg(test)]
@@ -76,8 +81,8 @@ mod tests {
 
     #[test]
     fn uniform_mid_gray_keeps_its_mean() {
-        // 0.5 gray must diffuse to roughly half white dots: the local
-        // mean is the property error diffusion exists to preserve.
+        // 0.5 gray quantizes to byte 128; Pillow's diffusion of a
+        // constant 128 plane yields exactly half white dots.
         let target = vec![0.5_f32; 64 * 64];
         let out = floyd_steinberg(&target, 64, 64, 64, 64);
         let white = out.iter().filter(|&&p| p == 1).count() as f64;
