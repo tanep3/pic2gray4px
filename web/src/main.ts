@@ -29,6 +29,11 @@ import {
   isFullRect,
 } from './crop';
 import { checkForUpdate, registerServiceWorker } from './pwa';
+import {
+  loadSettings,
+  saveSettings,
+  type PanelSettings,
+} from './settings';
 
 function el<T extends HTMLElement>(id: string): T {
   const element = document.getElementById(id);
@@ -117,6 +122,84 @@ function pressedValue(containerId: string, attr: string): string | null {
     `#${containerId} .chip[aria-pressed="true"]`,
   );
   return pressed?.dataset[attr] ?? null;
+}
+
+function collectPanelSettings(): PanelSettings {
+  return {
+    size: selectedSize(),
+    customWidth: customWidthInput.value,
+    mode: pressedValue('mode-chips', 'mode') ?? undefined,
+    mixer: pressedValue('mixer-chips', 'mixer') ?? undefined,
+    curve: pressedValue('curve-chips', 'curve') ?? undefined,
+    contrastMode: el<HTMLSelectElement>('contrast-mode').value,
+    contrastValue: el<HTMLInputElement>('contrast-range').value,
+    unsharpMode: el<HTMLSelectElement>('unsharp-mode').value,
+    unsharpValue: el<HTMLInputElement>('unsharp-range').value,
+    passes: el<HTMLInputElement>('passes-range').value,
+    localContrast: el<HTMLInputElement>('local-range').value,
+  };
+}
+
+function persistSettings(): void {
+  saveSettings(collectPanelSettings());
+}
+
+function pressChip(containerId: string, attr: string, value: string): void {
+  const chips = document.querySelectorAll<HTMLButtonElement>(
+    `#${containerId} .chip`,
+  );
+  const target = Array.from(chips).find((c) => c.dataset[attr] === value);
+  if (!target) return;
+  chips.forEach((c) => c.setAttribute('aria-pressed', 'false'));
+  target.setAttribute('aria-pressed', 'true');
+}
+
+function setSelect(id: string, value: string): void {
+  const select = el<HTMLSelectElement>(id);
+  if (Array.from(select.options).some((o) => o.value === value)) {
+    select.value = value;
+  }
+}
+
+function applyPanelSettings(settings: PanelSettings): void {
+  if (settings.size) {
+    pressChip('size-chips', 'size', settings.size);
+    customWidthRow.hidden = settings.size !== 'custom';
+  }
+  if (settings.customWidth) customWidthInput.value = settings.customWidth;
+  if (settings.mode) pressChip('mode-chips', 'mode', settings.mode);
+  if (settings.mixer) pressChip('mixer-chips', 'mixer', settings.mixer);
+  if (settings.curve) pressChip('curve-chips', 'curve', settings.curve);
+  if (settings.contrastMode) setSelect('contrast-mode', settings.contrastMode);
+  if (settings.contrastValue) {
+    el<HTMLInputElement>('contrast-range').value = settings.contrastValue;
+  }
+  if (settings.unsharpMode) setSelect('unsharp-mode', settings.unsharpMode);
+  if (settings.unsharpValue) {
+    el<HTMLInputElement>('unsharp-range').value = settings.unsharpValue;
+  }
+  if (settings.passes) el<HTMLInputElement>('passes-range').value = settings.passes;
+  if (settings.localContrast) {
+    el<HTMLInputElement>('local-range').value = settings.localContrast;
+  }
+  // Refresh the labels and disabled states that mirror these inputs.
+  const contrastRange = el<HTMLInputElement>('contrast-range');
+  contrastRange.disabled =
+    el<HTMLSelectElement>('contrast-mode').value !== 'manual';
+  el<HTMLElement>('contrast-value').textContent = formatValue(
+    Number.parseFloat(contrastRange.value),
+  );
+  const unsharpRange = el<HTMLInputElement>('unsharp-range');
+  unsharpRange.disabled =
+    el<HTMLSelectElement>('unsharp-mode').value !== 'manual';
+  el<HTMLElement>('unsharp-value').textContent = formatValue(
+    Number.parseFloat(unsharpRange.value),
+  );
+  el<HTMLElement>('passes-value').textContent =
+    el<HTMLInputElement>('passes-range').value;
+  el<HTMLElement>('local-value').textContent = formatValue(
+    Number.parseFloat(el<HTMLInputElement>('local-range').value),
+  );
 }
 
 function collectOptions(): ConvertOptions {
@@ -356,10 +439,14 @@ function initSizeChips(): void {
         .forEach((c) => c.setAttribute('aria-pressed', 'false'));
       chip.setAttribute('aria-pressed', 'true');
       customWidthRow.hidden = chip.dataset.size !== 'custom';
+      persistSettings();
       void requestConvert();
     });
   });
-  customWidthInput.addEventListener('change', () => void requestConvert());
+  customWidthInput.addEventListener('change', () => {
+    persistSettings();
+    void requestConvert();
+  });
 }
 
 function initAdjust(): void {
@@ -372,6 +459,7 @@ function initAdjust(): void {
             .querySelectorAll<HTMLButtonElement>(`#${containerId} .chip`)
             .forEach((c) => c.setAttribute('aria-pressed', 'false'));
           chip.setAttribute('aria-pressed', 'true');
+          persistSettings();
           void requestConvert();
         });
       });
@@ -382,7 +470,10 @@ function initAdjust(): void {
   localRange.addEventListener('input', () => {
     localValue.textContent = formatValue(Number.parseFloat(localRange.value));
   });
-  localRange.addEventListener('change', () => void requestConvert());
+  localRange.addEventListener('change', () => {
+    persistSettings();
+    void requestConvert();
+  });
 }
 
 function initAdvanced(): void {
@@ -400,12 +491,16 @@ function initAdvanced(): void {
     };
     mode.addEventListener('change', () => {
       sync();
+      persistSettings();
       void requestConvert();
     });
     range.addEventListener('input', () => {
       value.textContent = formatValue(Number.parseFloat(range.value));
     });
-    range.addEventListener('change', () => void requestConvert());
+    range.addEventListener('change', () => {
+      persistSettings();
+      void requestConvert();
+    });
     sync();
   }
   const passes = el<HTMLInputElement>('passes-range');
@@ -414,7 +509,10 @@ function initAdvanced(): void {
   passes.addEventListener('input', () => {
     passesValue.textContent = passes.value;
   });
-  passes.addEventListener('change', () => void requestConvert());
+  passes.addEventListener('change', () => {
+    persistSettings();
+    void requestConvert();
+  });
 }
 
 async function init(): Promise<void> {
@@ -443,6 +541,8 @@ async function init(): Promise<void> {
   initAdjust();
   initAdvanced();
   initCrop();
+  const savedSettings = loadSettings();
+  if (savedSettings) applyPanelSettings(savedSettings);
   saveButton.addEventListener('click', () => {
     if (resultPng) savePng(resultPng, nextSaveName('pic2gray4px'));
   });
